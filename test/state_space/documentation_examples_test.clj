@@ -1,4 +1,4 @@
-(ns state-space.manual-examples-test
+(ns state-space.documentation-examples-test
   (:require [clojure.set :as set]
             [clojure.test :refer [deftest is]]
             [state-space.core :as search]))

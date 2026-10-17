@@ -4,8 +4,9 @@ State-space exploration for Clojure, with depth-first, breadth-first,
 simple-path, post-order traversal, and best-first search plus worklist-based
 state propagation over explicit or generated state spaces.
 
-The [State-space manual source](state-space.tex) documents the API and includes
-worked examples.
+The [State-space documentation PDF](https://github.com/cao-/state-space/releases/latest/download/state-space.pdf)
+documents the API and includes worked examples. The
+[documentation source](state-space.tex) is also available in this repository.
 
 ## Installation
 

@@ -44,11 +44,17 @@ jobs:
           texlive_version: '2026'
           os: debian
           run: |
-            mkdir -p target/manual
+            mkdir -p target/documentation
             # OpTeX recommends three runs when the table of contents is at the beginning.
-            optex --interaction=nonstopmode --halt-on-error --output-directory=target/manual state-space.tex
-            optex --interaction=nonstopmode --halt-on-error --output-directory=target/manual state-space.tex
-            optex --interaction=nonstopmode --halt-on-error --output-directory=target/manual state-space.tex
+            optex --interaction=nonstopmode --halt-on-error --output-directory=target/documentation state-space.tex
+            optex --interaction=nonstopmode --halt-on-error --output-directory=target/documentation state-space.tex
+            optex --interaction=nonstopmode --halt-on-error --output-directory=target/documentation state-space.tex
+
+      - name: Upload documentation PDF
+        uses: actions/upload-artifact@v4
+        with:
+          name: state-space-documentation
+          path: target/documentation/state-space.pdf
 
   publish:
     name: Publish to Clojars
@@ -57,9 +63,17 @@ jobs:
       - test
       - documentation
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      - name: Download documentation PDF
+        uses: actions/download-artifact@v4
+        with:
+          name: state-space-documentation
+          path: target/documentation
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -77,6 +91,7 @@ jobs:
         env:
           CLOJARS_USERNAME: ${{ secrets.CLOJARS_USERNAME }}
           CLOJARS_PASSWORD: ${{ secrets.CLOJARS_PASSWORD }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           if [[ -z "$CLOJARS_USERNAME" || -z "$CLOJARS_PASSWORD" ]]; then
             echo "Configure the CLOJARS_USERNAME and CLOJARS_PASSWORD repository secrets." >&2
@@ -89,3 +104,6 @@ jobs:
           fi
           STATE_SPACE_VERSION="$version" clojure -T:build jar
           clojure -X:deploy
+          gh release create "$GITHUB_REF_NAME" target/documentation/state-space.pdf \
+            --title "State-space $version" \
+            --generate-notes
