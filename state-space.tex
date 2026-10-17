@@ -28,7 +28,7 @@ To try the examples from the project directory, start a~REPL with
 with:
 
 \begtt \hisyntax{clojure}
-(require '[state-space.core :as search])
+(require '[state-space.core :as ss])
 \endtt
 
 The algorithm sections introduce the core searches in order. The later
@@ -55,7 +55,7 @@ they can be passed directly:
    :right [:goal]
    :goal  []})
 
-(vec (search/dfs graph [:start]))
+(vec (ss/dfs graph [:start]))
 ;; => [{:state :start} {:state :left}
 ;;     {:state :goal} {:state :right}]
 \endtt
@@ -73,7 +73,7 @@ the current \code{:state} and returns a~collection of successor states:
   (when (< n 3)
     [(inc n)]))
 
-(mapv :state (search/dfs successors [0]))
+(mapv :state (ss/dfs successors [0]))
 ;; => [0 1 2 3]
 \endtt
 
@@ -82,7 +82,7 @@ visits. The consumer can take a~finite prefix even when the space is infinite:
 
 \begtt \hisyntax{clojure}
 (mapv :state
-      (take 4 (search/dfs (fn [n] [(inc n)]) [0])))
+      (take 4 (ss/dfs (fn [n] [(inc n)]) [0])))
 ;; => [0 1 2 3]
 \endtt
 
@@ -115,8 +115,8 @@ option:
 
 \begtt \hisyntax{clojure}
 (mapv (juxt :state :depth)
-      (search/dfs graph [:start]
-                  {:extensions [search/depth-extension]}))
+      (ss/dfs graph [:start]
+                  {:extensions [ss/depth-extension]}))
 ;; => [[:start 0] [:left 1] [:goal 2] [:right 1]]
 \endtt
 
@@ -124,8 +124,8 @@ The path extension records the states on the route so far:
 
 \begtt \hisyntax{clojure}
 (mapv :path
-      (search/dfs graph [:start]
-                  {:extensions [search/path-extension]}))
+      (ss/dfs graph [:start]
+                  {:extensions [ss/path-extension]}))
 ;; => [[:start] [:start :left] [:start :left :goal]
 ;;     [:start :right]]
 \endtt
@@ -149,7 +149,7 @@ first in this graph, while BFS finds the nearer route:
              :near [:goal]
              :goal []})
 
-(vec (search/bfs routes [:start]))
+(vec (ss/bfs routes [:start]))
 ;; => [{:state :start} {:state :detour} {:state :near}
 ;;     {:state :middle} {:state :goal}]
 \endtt
@@ -168,8 +168,8 @@ depth extension when the edge-count depth is useful:
 
 \begtt \hisyntax{clojure}
 (mapv (juxt :state :depth)
-      (search/bfs routes [:start]
-                  {:extensions [search/depth-extension]}))
+      (ss/bfs routes [:start]
+                  {:extensions [ss/depth-extension]}))
 ;; => [[:start 0] [:detour 1] [:near 1]
 ;;     [:middle 2] [:goal 2]]
 \endtt
@@ -179,8 +179,8 @@ Clojure combination \code{first} and \code{filter} to take the first matching
 visit. Since the search is lazy, it stops as soon as the goal is found:
 
 \begtt \hisyntax{clojure}
-(->> (search/bfs routes [:start]
-                 {:extensions [search/path-extension]})
+(->> (ss/bfs routes [:start]
+                 {:extensions [ss/path-extension]})
      (filter #(= :goal (:state %)))
      first
      :path)
@@ -193,7 +193,7 @@ space:
 
 \begtt \hisyntax{clojure}
 (mapv :state
-      (take 4 (search/bfs (fn [n] [(inc n)]) [0])))
+      (take 4 (ss/bfs (fn [n] [(inc n)]) [0])))
 ;; => [0 1 2 3]
 \endtt
 
@@ -211,7 +211,7 @@ first returns visits with just their \code{:state}. Here the repeated
             :b [:c]
             :c [:a]})
 
-(vec (search/simple-paths paths [:a]))
+(vec (ss/simple-paths paths [:a]))
 ;; => [{:state :a} {:state :b} {:state :c} {:state :c}]
 \endtt
 
@@ -219,8 +219,8 @@ To see each route prefix explicitly, add the path extension:
 
 \begtt \hisyntax{clojure}
 (mapv :path
-      (search/simple-paths paths [:a]
-                           {:extensions [search/path-extension]}))
+      (ss/simple-paths paths [:a]
+                           {:extensions [ss/path-extension]}))
 ;; => [[:a] [:a :b] [:a :b :c] [:a :c]]
 \endtt
 
@@ -232,7 +232,7 @@ consumed:
 
 \begtt \hisyntax{clojure}
 (mapv :state
-      (take 4 (search/simple-paths (fn [n] [(inc n)]) [0])))
+      (take 4 (ss/simple-paths (fn [n] [(inc n)]) [0])))
 ;; => [0 1 2 3]
 \endtt
 
@@ -245,7 +245,7 @@ post-order. When edges point from a~task to its prerequisites, prerequisites
 therefore appear first. For example, this gives a~valid build order:
 
 \begtt \hisyntax{clojure}
-(vec (search/postorder {:package [:compile]
+(vec (ss/postorder {:package [:compile]
                           :compile [:parse]
                           :parse []}
                          [:package]))
@@ -270,7 +270,7 @@ immediately:
     (map #(vector :task %) (range))
     []))
 
-(mapv :state (take 1 (search/postorder dependencies [:root])))
+(mapv :state (take 1 (ss/postorder dependencies [:root])))
 ;; => [[:task 0]]
 \endtt
 
@@ -315,7 +315,7 @@ unchanged to its successor.
 (def tiny-space {:start [:next]
                  :next []})
 
-(:values (last (search/propagate tiny-space
+(:values (last (ss/propagate tiny-space
                                  {:start #{:ready}}
                                  {:bottom #{}
                                   :join set/union})))
@@ -345,7 +345,7 @@ Dijkstra's search when weights are finite and non-negative:
              :quick [:goal]
              :goal []})
 
-(vec (search/best-first routes [:home]))
+(vec (ss/best-first routes [:home]))
 ;; => [{:state :home :distance 0} {:state :slow :distance 1}
 ;;     {:state :quick :distance 1} {:state :goal :distance 2}]
 \endtt
@@ -361,7 +361,7 @@ transition map with a~\code{:weight}:
    :goal []})
 
 (mapv (juxt :state :distance)
-      (search/best-first weighted-routes [:home]
+      (ss/best-first weighted-routes [:home]
                          {:decode-edge (fn [[state weight]]
                                          {:state state :weight weight})}))
 ;; => [[:home 0] [:quick 1] [:goal 3] [:slow 5]]
@@ -370,7 +370,7 @@ transition map with a~\code{:weight}:
 An optional \code{:priority} function can order visits by something other than
 distance, or add an estimate of the remaining cost as in A* search. A custom
 priority does not automatically calculate \code{:distance}; include
-\code{search/distance-extension} explicitly when the priority or results need
+\code{ss/distance-extension} explicitly when the priority or results need
 it. For example, a~route planner can combine the cost already travelled with
 a~lower-bound estimate to the goal:
 
@@ -381,11 +381,11 @@ a~lower-bound estimate to the goal:
             :goal []})
 (def estimate {:home 3 :hill 4 :river 2 :goal 0})
 
-(->> (search/best-first roads [:home]
+(->> (ss/best-first roads [:home]
                         {:decode-edge (fn [[state weight]]
                                         {:state state :weight weight})
-                         :extensions [search/path-extension
-                                      search/distance-extension]
+                         :extensions [ss/path-extension
+                                      ss/distance-extension]
                          :priority (fn [{:keys [state distance]}]
                                      (+ distance (estimate state)))})
 (filter #(= :goal (:state %)))
@@ -422,7 +422,7 @@ finite prefix can be consumed even when the search space is infinite:
 
 \begtt \hisyntax{clojure}
 (mapv :state
-      (take 4 (search/best-first (fn [n] [(inc n)]) [0])))
+      (take 4 (ss/best-first (fn [n] [(inc n)]) [0])))
 ;; => [0 1 2 3]
 \endtt
 
@@ -450,8 +450,8 @@ context:
                      :goal []})
 
 (mapv (juxt :state :depth)
-      (search/dfs context-routes [:start]
-                  {:extensions [search/depth-extension]
+      (ss/dfs context-routes [:start]
+                  {:extensions [ss/depth-extension]
                    :visit-key (juxt :state :depth)}))
 ;; => [[:start 0] [:near 1] [:goal 2]
 ;;     [:detour 1] [:middle 2] [:goal 3]]
@@ -476,9 +476,9 @@ discards later arrivals to that state:
     (depth-limited-routes state)))
 
 (mapv (juxt :state :depth)
-      (search/bfs within-depth [:start]
+      (ss/bfs within-depth [:start]
                   {:project identity
-                   :extensions [search/depth-extension]}))
+                   :extensions [ss/depth-extension]}))
 ;; => [[:start 0] [:junction 1] [:detour 1] [:goal 2]]
 \endtt
 
@@ -508,10 +508,10 @@ nodes. Here the two equal branch subtrees are distinct occurrences:
            :children [repeated-branch repeated-branch]})
 (defn values [nodes] (mapv :value nodes))
 
-(values (map :state (search/dfs :children [tree])))
+(values (map :state (ss/dfs :children [tree])))
 ;; => [:root :branch :leaf]
 
-(values (map :state (search/dfs :children [tree] {:visit-key nil})))
+(values (map :state (ss/dfs :children [tree] {:visit-key nil})))
 ;; => [:root :branch :leaf :branch :leaf]
 
 (values (tree-seq (comp seq :children) :children tree))
@@ -530,12 +530,12 @@ track remaining fuel along a~route:
 
 \begtt \hisyntax{clojure}
 (def fuel-extension
-  (search/accumulate :fuel-left (constantly 10)
+  (ss/accumulate :fuel-left (constantly 10)
                      (fn [fuel transition]
                        (- fuel (:fuel-used transition)))))
 
 (mapv (juxt :state :fuel-left)
-      (search/dfs {:trailhead [[:ridge 3]]
+      (ss/dfs {:trailhead [[:ridge 3]]
                    :ridge []}
                   [:trailhead]
                   {:decode-edge (fn [[state fuel-used]]
@@ -553,9 +553,9 @@ values. This is useful when legal moves depend on search context:
   (when (< depth 2)
     [(inc state)]))
 
-(vec (search/dfs bounded-successors [0]
+(vec (ss/dfs bounded-successors [0]
                  {:project identity
-                  :extensions [search/depth-extension]}))
+                  :extensions [ss/depth-extension]}))
 ;; => [{:state 0 :depth 0} {:state 1 :depth 1} {:state 2 :depth 2}]
 \endtt
 
@@ -565,9 +565,9 @@ called for that visit and no successors are generated:
 
 \begtt \hisyntax{clojure}
 (mapv (juxt :state :depth)
-      (search/dfs {0 [1] 1 [2] 2 [3] 3 []}
+      (ss/dfs {0 [1] 1 [2] 2 [3] 3 []}
                   [0]
-                  {:extensions [search/depth-extension]
+                  {:extensions [ss/depth-extension]
                    :expand? #(< (:depth %) 2)}))
 ;; => [[0 0] [1 1] [2 2]]
 \endtt
@@ -583,7 +583,7 @@ dependency subtree:
            {:size (inc (reduce + (map :size successors)))})})
 
 (mapv (juxt :state :size)
-      (search/postorder {:app [:lib :config]
+      (ss/postorder {:app [:lib :config]
                            :lib [:base]
                            :base []
                            :config []}
@@ -608,7 +608,7 @@ the fallback build:
              {:ready? (= state :cached)}))})
 
 (mapv #(select-keys % [:state :ready? :selected])
-      (search/postorder {:root [:cached :build]
+      (ss/postorder {:root [:cached :build]
                            :cached []
                            :build []}
                           [:root]
@@ -628,7 +628,7 @@ order:
 
 (mapv (juxt :state :position)
       (take 2
-            (search/postorder {:app [:lib :config]
+            (ss/postorder {:app [:lib :config]
                                  :lib []
                                  :config []}
                                 [:app]
@@ -650,7 +650,7 @@ without following them again:
                          successors)})})
 
 (mapv (juxt :state :edges)
-      (search/postorder {:a [[:b :depends-on]]
+      (ss/postorder {:a [[:b :depends-on]]
                            :b [[:a :depends-on]]}
                           [:a]
                           {:decode-edge (fn [[state kind]]
@@ -672,10 +672,10 @@ along a~route:
    :next []})
 
 (mapv #(select-keys % [:state :trail])
-      (search/dfs weighted-graph [:start]
+      (ss/dfs weighted-graph [:start]
                   {:decode-edge (fn [[state weight]]
                                   {:state state :weight weight})
-                   :extensions [search/trail-extension]}))
+                   :extensions [ss/trail-extension]}))
 ;; => [{:state :start :trail [{:state :start}]}
 ;;     {:state :next :trail [{:state :start}
 ;;                           {:state :next :weight 7}]}]
@@ -685,7 +685,7 @@ Without a~decoder, each raw successor is treated as a~state, even if it is
 a~map. The trail starts with \code{\{:state start\}}; later entries are the
 decoded transitions. DFS, BFS, and \code{simple-paths} do not interpret edge
 weights. Best-first's default distance priority uses \code{:weight} to calculate
-\code{:distance}; custom priorities need \code{search/distance-extension} to
+\code{:distance}; custom priorities need \code{ss/distance-extension} to
 calculate distance;
 post-order traversal exposes each incoming transition as \code{:via}.
 For option defaults and termination behavior, see
@@ -720,7 +720,7 @@ callbacks, described above.
 * Best-first also accepts \code{:priority}, a~function of the visit that
   determines queue order. It defaults to \code{:distance}, which automatically
   enables \code{distance-extension}. A custom priority does not add
-  \code{:distance}; add \code{search/distance-extension} to \code{:extensions}
+  \code{:distance}; add \code{ss/distance-extension} to \code{:extensions}
   if it needs cumulative distance. Priority values must be mutually comparable.
 \enditems
 
@@ -813,7 +813,7 @@ adjacency map describes how capabilities flow from dependencies to services:
 
 (def values
   (:values
-   (last (search/propagate service-dependencies
+   (last (ss/propagate service-dependencies
                            {:catalog-db #{:sql}
                             :identity-provider #{:oauth}}
                            {:bottom #{}
@@ -864,7 +864,7 @@ sending a~contribution along every outgoing edge:
     (map (fn [target] {:state target :value outgoing}) successors)))
 
 (def progress
-  (search/propagate transfer
+  (ss/propagate transfer
                     {:entry #{}}
                     {:project identity
                      :decode-edge identity
@@ -908,8 +908,8 @@ a~successor. Record the route and stop at the first visit to the exit:
    :exit []})
 
 (first (filter #(= :exit (:state %))
-               (search/dfs building [:lobby]
-                           {:extensions [search/path-extension]})))
+               (ss/dfs building [:lobby]
+                           {:extensions [ss/path-extension]})))
 ;; => {:state :exit, :path [:lobby :stairs :landing :exit]}
 \endtt
 
@@ -938,7 +938,7 @@ the index in the state tells us when all decisions have been made:
     [[(inc i) chosen]
      [(inc i) (conj chosen (items i))]]))
 
-(->> (search/dfs subset-decisions [[0 []]])
+(->> (ss/dfs subset-decisions [[0 []]])
      (map :state)
      (filter #(= (count items) (first %)))
      (map second)
@@ -980,7 +980,7 @@ then explores only safe partial boards:
       (conj placed column))))
 
 (count (filter #(= 8 (count (:state %)))
-               (search/dfs queen-placements [[]])))
+               (ss/dfs queen-placements [[]])))
 ;; => 92
 \endtt
 
@@ -1013,8 +1013,8 @@ fewest moves:
                  (not (contains? blocked-squares [nx ny]))))
           [[(inc x) y] [(dec x) y] [x (inc y)] [x (dec y)]]))
 
-(->> (search/bfs grid-moves [[0 2]]
-                 {:extensions [search/depth-extension]})
+(->> (ss/bfs grid-moves [[0 2]]
+                 {:extensions [ss/depth-extension]})
      (filter #(= [4 2] (:state %)))
      first
      :depth)
@@ -1052,8 +1052,8 @@ into a~map and arrange them back into rows:
 
 (def distance
   (into {} (map (juxt :state :depth))
-        (search/bfs neighbours starts
-                    {:extensions [search/depth-extension]})))
+        (ss/bfs neighbours starts
+                    {:extensions [ss/depth-extension]})))
 
 (mapv (fn [row]
         (mapv #(distance [row %]) (range (count (first grid)))))
@@ -1094,8 +1094,8 @@ disconnected triangle cannot be missed:
     (let [component
           (into {} (map (fn [{:keys [state depth]}]
                           [state (mod depth 2)]))
-                (search/bfs adjacent [root]
-                            {:extensions [search/depth-extension]}))]
+                (ss/bfs adjacent [root]
+                            {:extensions [ss/depth-extension]}))]
       (if (some (fn [[node colour]]
                   (some #(= colour (component %)) (adjacent node)))
                 component)
@@ -1142,9 +1142,9 @@ the first arrival is the one with the most clicks still available:
     (website state)))
 
 (mapv (juxt :state :depth)
-      (search/bfs website-links [:home]
+      (ss/bfs website-links [:home]
                   {:project identity
-                   :extensions [search/depth-extension]}))
+                   :extensions [ss/depth-extension]}))
 ;; => [[:home 0] [:about 1] [:shop 1] [:team 2] [:item 2]]
 \endtt
 
@@ -1163,8 +1163,8 @@ successors at all.
 
 \begtt \hisyntax{clojure}
 (mapv (juxt :state :depth)
-      (search/bfs website [:home]
-                  {:extensions [search/depth-extension]
+      (ss/bfs website [:home]
+                  {:extensions [ss/depth-extension]
                    :expand? #(< (:depth %) 2)}))
 ;; => [[:home 0] [:about 1] [:shop 1] [:team 2] [:item 2]]
 \endtt
@@ -1189,8 +1189,8 @@ knight moves from a~square, then use BFS because every move has equal cost.
         :when (every? #(<= 0 % 7) next)]
     next))
 
-(->> (search/bfs knight-moves [[0 0]]
-                 {:extensions [search/depth-extension]})
+(->> (ss/bfs knight-moves [[0 0]]
+                 {:extensions [ss/depth-extension]})
      (filter #(= [7 7] (:state %)))
      first
      :depth)
@@ -1222,8 +1222,8 @@ with the fewest actions, and the path extension shows the states along it:
      [(- a pour-ab) (+ b pour-ab)]
      [(+ a pour-ba) (- b pour-ba)]]))
 
-(->> (search/bfs jug-moves [[0 0]]
-                 {:extensions [search/path-extension]})
+(->> (ss/bfs jug-moves [[0 0]]
+                 {:extensions [ss/path-extension]})
      (filter (fn [{[_ b] :state}] (= 4 b)))
      first
      :path)
@@ -1265,8 +1265,8 @@ when both banks remain safe. BFS finds the minimum number of crossings:
           :when (safe-state? next)]
       next)))
 
-(->> (search/bfs crossings [[3 3 0]]
-                 {:extensions [search/depth-extension]})
+(->> (ss/bfs crossings [[3 3 0]]
+                 {:extensions [ss/depth-extension]})
      (filter #(= [0 0 1] (:state %)))
      first
      :depth)
@@ -1293,8 +1293,8 @@ fewest subtractions:
   (for [root (range 1 (inc (long (Math/sqrt remaining))))]
     (- remaining (* root root))))
 
-(->> (search/bfs square-subtractions [12]
-                 {:extensions [search/path-extension]})
+(->> (ss/bfs square-subtractions [12]
+                 {:extensions [ss/path-extension]})
      (filter #(zero? (:state %)))
      first
      :path)
@@ -1332,8 +1332,8 @@ turns:
         :when (not (blocked-codes next-code))]
     next-code))
 
-(->> (search/bfs lock-turns ["0000"]
-                 {:extensions [search/depth-extension]})
+(->> (ss/bfs lock-turns ["0000"]
+                 {:extensions [ss/depth-extension]})
      (filter #(= "0202" (:state %)))
      first
      :depth)
@@ -1371,8 +1371,8 @@ blank with each adjacent position. BFS finds a~shortest solution:
              (tiles (+ (* r 3) c))
              (+ (* r 3) c) 0))))
 
-(->> (search/bfs slide-blank [[4 1 3 0 2 5]]
-                 {:extensions [search/path-extension]})
+(->> (ss/bfs slide-blank [[4 1 3 0 2 5]]
+                 {:extensions [ss/path-extension]})
      (filter #(= [1 2 3 4 5 0] (:state %)))
      first
      :path)
@@ -1429,8 +1429,8 @@ BFS searches these joint configurations by number of player moves:
         :when (not (wall? next-box))]
     [next-player next-box]))
 
-(->> (search/bfs sokoban-moves [[[1 1] [2 2]]]
-                 {:extensions [search/depth-extension]})
+(->> (ss/bfs sokoban-moves [[[1 1] [2 2]]]
+                 {:extensions [ss/depth-extension]})
      (filter #(= [2 4] (second (:state %))))
      first
      :depth)
@@ -1465,9 +1465,9 @@ undoes part of the initial arrangement:
       (conj without [block]))))
 
 (let [plan (first (filter #(= #{[:c :b :a]} (:state %))
-                          (search/bfs block-moves [#{[:a :c] [:b]}]
-                                      {:extensions [search/depth-extension
-                                                    search/path-extension]})))]
+                          (ss/bfs block-moves [#{[:a :c] [:b]}]
+                                      {:extensions [ss/depth-extension
+                                                    ss/path-extension]})))]
   {:depth (:depth plan)
    :path (mapv #(vec (sort-by first %)) (:path plan))})
 ;; => {:depth 3, :path [[[:a :c] [:b]] [[:a] [:b] [:c]]
@@ -1502,8 +1502,8 @@ neighbours from the dictionary. BFS finds the shortest route:
 (defn ladder-neighbours [word]
   (filter #(one-letter-apart? word %) words))
 
-(->> (search/bfs ladder-neighbours ["cold"]
-                 {:extensions [search/path-extension]})
+(->> (ss/bfs ladder-neighbours ["cold"]
+                 {:extensions [ss/path-extension]})
      (filter #(= "warm" (:state %)))
      first
      :path)
@@ -1535,8 +1535,8 @@ each route prefix:
    :market [:park :museum]
    :museum []})
 
-(->> (search/simple-paths city-map [:home]
-                          {:extensions [search/path-extension]})
+(->> (ss/simple-paths city-map [:home]
+                          {:extensions [ss/path-extension]})
      (filter #(= :museum (:state %)))
      (map :path)
      vec)
@@ -1569,11 +1569,11 @@ depth:
    :b [:a :c]
    :c [:a]})
 
-(->> (search/bfs walk-graph [:a]
+(->> (ss/bfs walk-graph [:a]
                  {:visit-key nil
                   :expand? #(< (:depth %) 3)
-                  :extensions [search/depth-extension
-                               search/path-extension]})
+                  :extensions [ss/depth-extension
+                               ss/path-extension]})
      (filter #(= 3 (:depth %)))
      (map :path)
      set)
@@ -1611,8 +1611,8 @@ from each possible node:
   (map (fn [node] [node #{node}])
        (range (count graph))))
 
-(->> (search/bfs visit-next starts
-                 {:extensions [search/depth-extension]})
+(->> (ss/bfs visit-next starts
+                 {:extensions [ss/depth-extension]})
      (filter #(= all-nodes (second (:state %))))
      first
      :depth)
@@ -1654,9 +1654,9 @@ shortest trace when the waiting condition is broken:
 
 (defn violation [wait?]
   (first (filter #(= [3 3] (get-in % [:state :pc]))
-                 (search/bfs (process-steps wait?) [initial-system]
-                             {:extensions [search/depth-extension
-                                           search/path-extension]}))))
+                 (ss/bfs (process-steps wait?) [initial-system]
+                             {:extensions [ss/depth-extension
+                                           ss/path-extension]}))))
 
 (let [counterexample (violation false)]
   [(nil? (violation true))
@@ -1692,10 +1692,10 @@ uses the accumulated distance to return the least-cost route:
    :hill [[:museum 2]]
    :museum []})
 
-(->> (search/best-first travel-times [:home]
+(->> (ss/best-first travel-times [:home]
                         {:decode-edge (fn [[state weight]]
                                         {:state state :weight weight})
-                         :extensions [search/path-extension]})
+                         :extensions [ss/path-extension]})
      (filter #(= :museum (:state %)))
      first
      (select-keys [:path :distance]))
@@ -1734,7 +1734,7 @@ decoded incoming edge supplies its weight:
                            (map #(+ (:weight (:via %)) (:cost %))
                                 successors)))})})
 
-(:cost (last (search/postorder dag [:s]
+(:cost (last (ss/postorder dag [:s]
                                  {:decode-edge identity
                                   :extensions [route-cost]})))
 ;; => -2
@@ -1742,59 +1742,8 @@ decoded incoming edge supplies its weight:
 
 Topological dynamic programming handles negative weights because the DAG
 has no route back to an earlier node. A~general graph with negative cycles
-needs a~different algorithm.
-
-\secc Relax negative edges and detect negative cycles
-
-\noindent{\bf Problem.} A~directed graph may have negative edge weights.
-Find the least distance from \code{:s} to each reachable node, or report
-whether a~reachable negative cycle makes the distances unbounded below.
-
-\smallskip
-\noindent{\bf Solution.} Bellman--Ford repeatedly relaxes every edge:
-if reaching \code{from} costs \code{d}, then reaching \code{to} through
-that edge costs at most \code{d + weight}. After at most $|V|-1$ passes,
-shortest paths without repeated vertices have been considered. If another
-pass could still improve a~distance, a~reachable negative cycle exists.
-These are synchronous algorithm rounds, expressed directly with
-\code{iterate}; they are not fixed-point \code{propagate} updates:
-
-\begtt \hisyntax{clojure}
-(defn bellman-ford [nodes edges source]
-  (let [relax-edge
-        (fn [distances [from to weight]]
-          (if-some [from-distance (distances from)]
-            (update distances to
-                    #(if (some? %)
-                       (min % (+ from-distance weight))
-                       (+ from-distance weight)))
-            distances))
-        relax (fn [distances] (reduce relax-edge distances edges))
-        distances (nth (iterate relax {source 0})
-                       (dec (count nodes)))
-        negative-cycle?
-        (some (fn [[from to weight]]
-                (when-some [from-distance (distances from)]
-                  (when-some [to-distance (distances to)]
-                    (< (+ from-distance weight) to-distance))))
-              edges)]
-    (if negative-cycle? :negative-cycle distances)))
-
-(def nodes #{:s :a :b :t})
-(def edges [[:s :a 4] [:s :b 3] [:a :b -2]
-            [:a :t 5] [:b :t 1]])
-
-[(bellman-ford nodes edges :s)
- (bellman-ford #{:s :a :b}
-               [[:s :a 1] [:a :b -2] [:b :a 1]]
-               :s)]
-;; => [{:s 0, :a 4, :b 2, :t 3} :negative-cycle]
-\endtt
-
-The vertex-count bound is essential: with no negative cycle, a~shortest
-route needs no repeated vertex. On a~reachable negative cycle, adding one
-more edge can keep lowering the distance. These deterministic relaxation
-passes are distinct from change-driven fixed-point propagation.
+needs a~different algorithm; negative-cycle detection is outside this
+library's API.
 
 \secc Grow a~minimum spanning tree
 
@@ -1826,7 +1775,7 @@ cumulative distance from the start:
             :road [(:state parent) (:state transition)
                    (:weight transition)]})})
 
-(let [tree (search/best-first roads [:a]
+(let [tree (ss/best-first roads [:a]
                               {:decode-edge identity
                                :extensions [joining-edge]
                                :priority :joining-edge})]
@@ -1868,11 +1817,11 @@ best-first prioritize that value:
      :climb (abs (- there here))}))
 
 (def effort-extension
-  (search/accumulate :effort (constantly 0)
+  (ss/accumulate :effort (constantly 0)
                      (fn [effort transition]
                        (max effort (:climb transition)))))
 
-(->> (search/best-first grid-climbs [[0 0]]
+(->> (ss/best-first grid-climbs [[0 0]]
                         {:decode-edge identity
                          :extensions [effort-extension]
                          :priority :effort})
@@ -1914,10 +1863,10 @@ each traveler independently:
     {:state [next-a next-b]
      :weight (max time-a time-b)}))
 
-(->> (search/best-first simultaneous-moves
+(->> (ss/best-first simultaneous-moves
                         [[:west :east]]
                         {:decode-edge identity
-                         :extensions [search/path-extension]})
+                         :extensions [ss/path-extension]})
      (filter (fn [{[city-a city-b] :state}]
                (= city-a city-b)))
      first
@@ -1962,7 +1911,7 @@ so best-first returns the least-duration complete presentation:
 
 (def presentation
   (first (filter #(empty? (get-in % [:state :remaining]))
-                 (search/best-first
+                 (ss/best-first
                   add-clip
                   [{:remaining required-topics :selected []}]
                   {:decode-edge identity}))))
@@ -2004,11 +1953,11 @@ accumulated Dijkstra distance is the arrival time:
         :when (<= distance departs)]
     [to (- arrives distance)]))
 
-(->> (search/best-first catchable-trips [:home]
+(->> (ss/best-first catchable-trips [:home]
                         {:project identity
                          :decode-edge (fn [[state weight]]
                                         {:state state :weight weight})
-                         :extensions [search/path-extension]})
+                         :extensions [ss/path-extension]})
      (filter #(= :museum (:state %)))
      first
      (select-keys [:path :distance]))
@@ -2052,12 +2001,12 @@ the full transitions along the selected route:
    :hill [[:museum 2 :rail]]
    :museum []})
 
-(->> (search/best-first labelled-travel [:home]
+(->> (ss/best-first labelled-travel [:home]
                         {:decode-edge (fn [[state weight mode]]
                                         {:state state
                                          :weight weight
                                          :mode mode})
-                         :extensions [search/trail-extension]})
+                         :extensions [ss/trail-extension]})
      (filter #(= :museum (:state %)))
      first
      (select-keys [:trail :distance]))
@@ -2104,9 +2053,9 @@ distinct automaton states at the same graph node separate:
         :when next-phase]
     {:state [to next-phase] :label label}))
 
-(let [route (->> (search/bfs matching-edges [[:start :need-a]]
+(let [route (->> (ss/bfs matching-edges [[:start :need-a]]
                              {:decode-edge identity
-                              :extensions [search/trail-extension]})
+                              :extensions [ss/trail-extension]})
                 (filter #(= [:target :accept] (:state %)))
                 first)]
   (mapv :label (rest (:trail route))))
@@ -2144,11 +2093,11 @@ time:
 (def remaining-time
   {:home 3 :hill 4 :river 2 :market 2 :goal 0})
 
-(->> (search/best-first delivery-routes [:home]
+(->> (ss/best-first delivery-routes [:home]
                         {:decode-edge (fn [[state weight]]
                                         {:state state :weight weight})
-                         :extensions [search/path-extension
-                                      search/distance-extension]
+                         :extensions [ss/path-extension
+                                      ss/distance-extension]
                          :priority (fn [{:keys [state distance]}]
                                      (+ distance
                                         (remaining-time state)))})
@@ -2186,7 +2135,7 @@ same junction with different fuel is a~different search position.
    :goal []})
 
 (def fuel-left
-  (search/accumulate :fuel-left (constantly 5)
+  (ss/accumulate :fuel-left (constantly 5)
                      (fn [fuel transition]
                        (- fuel (:fuel-used transition)))))
 
@@ -2194,12 +2143,12 @@ same junction with different fuel is a~different search position.
   (filter (fn [[_ fuel-used]] (<= fuel-used fuel-left))
           (fuel-routes state)))
 
-(->> (search/bfs affordable-routes [:home]
+(->> (ss/bfs affordable-routes [:home]
                  {:project identity
                   :visit-key (juxt :state :fuel-left)
                   :decode-edge (fn [[state fuel-used]]
                                  {:state state :fuel-used fuel-used})
-                  :extensions [fuel-left search/path-extension]})
+                  :extensions [fuel-left ss/path-extension]})
      (filter #(= :goal (:state %)))
      first
      (select-keys [:path :fuel-left]))
@@ -2252,7 +2201,7 @@ in fuel or samples:
 (def initial-rover
   {:position base :fuel capacity :collected #{}})
 
-(->> (search/bfs rover-moves [initial-rover]
+(->> (ss/bfs rover-moves [initial-rover]
                  {:decode-edge identity})
      (filter #(and (= base (get-in % [:state :position]))
                    (= #{:amber :cobalt}
@@ -2286,7 +2235,7 @@ Post-order traversal returns each task after its prerequisites. The shared
    :base []})
 
 (mapv :state
-      (search/postorder task-prerequisites [:app]))
+      (ss/postorder task-prerequisites [:app]))
 ;; => [:base :lib :config :app]
 \endtt
 
@@ -2318,7 +2267,7 @@ step's start time to their total duration:
                                (map #(prep-minutes (:state %))
                                     (:previous parent)))})})
 
-(->> (search/postorder {:lunch [:chop-vegetables
+(->> (ss/postorder {:lunch [:chop-vegetables
                                   :mix-dressing
                                   :plate-food]
                           :chop-vegetables []
@@ -2359,7 +2308,7 @@ restore visit stop requesting successors once a~completed source succeeds:
              {:available? (contains? available-copies state)}))})
 
 (mapv #(select-keys % [:state :available? :source])
-      (search/postorder {:restore [:local-copy :network-copy]
+      (ss/postorder {:restore [:local-copy :network-copy]
                            :local-copy []
                            :network-copy []}
                           [:restore]
@@ -2396,7 +2345,7 @@ the resulting set:
               :size (inc (count included))}))})
 
 (mapv (juxt :state :size)
-      (search/postorder {:app [:compile :docs]
+      (ss/postorder {:app [:compile :docs]
                            :compile [:parse]
                            :docs [:parse]
                            :parse []}
@@ -2437,14 +2386,14 @@ directed acyclic graph containing all shortest routes. A~post-order
 
 (def depth
   (into {} (map (juxt :state :depth))
-        (search/bfs route-graph [:a]
-                    {:extensions [search/depth-extension]})))
+        (ss/bfs route-graph [:a]
+                    {:extensions [ss/depth-extension]})))
 
 (defn shortest-edges [state]
   (filter #(= (inc (depth state)) (depth %))
           (route-graph state)))
 
-(->> (search/postorder shortest-edges [:a]
+(->> (ss/postorder shortest-edges [:a]
                          {:extensions
                           [{:exit (fn [{:keys [state]} successors]
                                     {:count (if (= state :e)
@@ -2487,7 +2436,7 @@ successors:
                     1
                     (transduce (map :ways) + 0 suffixes))})})
 
-(:ways (last (search/postorder next-cuts [0]
+(:ways (last (ss/postorder next-cuts [0]
                                  {:extensions [count-ways]})))
 ;; => 2
 \endtt
@@ -2539,7 +2488,7 @@ board after its children: \code{:x} chooses the largest child value and
                        (apply max (map :value children))
                        :else (apply min (map :value children)))}))})
 
-(let [positions (search/postorder legal-moves
+(let [positions (ss/postorder legal-moves
                                     [(vec (repeat 9 nil))]
                                     {:extensions [game-value]})]
   [(count positions) (:value (last positions))])
@@ -2571,7 +2520,7 @@ edge to a~task still being explored:
                          successors)})})
 
 (mapv (juxt :state :edges)
-      (search/postorder {:api [[:database :requires]]
+      (ss/postorder {:api [[:database :requires]]
                            :database [[:api :requires]]}
                           [:api]
                           {:decode-edge (fn [[state kind]]

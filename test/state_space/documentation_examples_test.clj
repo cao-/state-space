@@ -1,14 +1,14 @@
 (ns state-space.documentation-examples-test
   (:require [clojure.set :as set]
             [clojure.test :refer [deftest is]]
-            [state-space.core :as search]))
+            [state-space.core :as ss]))
 
 (deftest propagate-value-through-a-simple-space
   (let [space {:start [:next]
                :next []}]
     (is (= {:start #{:ready}
             :next #{:ready}}
-           (:values (last (search/propagate space
+           (:values (last (ss/propagate space
                                            {:start #{:ready}}
                                            {:bottom #{}
                                             :join set/union})))))))
@@ -20,7 +20,7 @@
                               :account-api [:storefront]
                               :storefront []}
         values (:values
-                (last (search/propagate service-dependencies
+                (last (ss/propagate service-dependencies
                                         {:catalog-db #{:sql}
                                          :identity-provider #{:oauth}}
                                         {:bottom #{}
@@ -41,8 +41,8 @@
     (is (= {:state :exit
             :path [:lobby :stairs :landing :exit]}
            (first (filter #(= :exit (:state %))
-                          (search/dfs building [:lobby]
-                                      {:extensions [search/path-extension]})))))))
+                          (ss/dfs building [:lobby]
+                                      {:extensions [ss/path-extension]})))))))
 
 (deftest disabling-visit-key-preserves-equal-tree-occurrences
   (let [  repeated-branch {:value :branch
@@ -50,10 +50,10 @@
   tree {:value :root
         :children [repeated-branch repeated-branch]}
   values (fn [nodes] (mapv :value nodes))
-  default-dfs (values (map :state (search/dfs :children [tree])))
+  default-dfs (values (map :state (ss/dfs :children [tree])))
   undeduplicated-dfs
   (values (map :state
-               (search/dfs :children [tree] {:visit-key nil})))
+               (ss/dfs :children [tree] {:visit-key nil})))
   tree-seq-values
   (values (tree-seq (comp seq :children) :children tree))]
     (is (= [:root :branch :leaf] default-dfs))
@@ -66,7 +66,7 @@
                            (when (< i (count items))
                              [[(inc i) chosen]
                               [(inc i) (conj chosen (items i))]]))
-        subsets (->> (search/dfs subset-decisions [[0 []]])
+        subsets (->> (ss/dfs subset-decisions [[0 []]])
                      (map :state)
                      (filter #(= (count items) (first %)))
                      (map second)
@@ -93,7 +93,7 @@
                   :when (safe-column? placed column)]
               (conj placed column))))
         solutions (filter #(= 8 (count (:state %)))
-                          (search/dfs placements [[]]))]
+                          (ss/dfs placements [[]]))]
     (is (= 92 (count solutions)))
     (is (every? (fn [{:keys [state]}]
                   (= 8 (count (set state))))
@@ -111,8 +111,8 @@
     (is (= 8
            (:depth (first (filter
                            #(= [4 2] (:state %))
-                           (search/bfs grid-moves [[0 2]]
-                                       {:extensions [search/depth-extension]}))))))))
+                           (ss/bfs grid-moves [[0 2]]
+                                       {:extensions [ss/depth-extension]}))))))))
 
 (deftest find-each-cells-distance-to-the-nearest-zero
   (let [grid ["000" "010" "111"]
@@ -125,8 +125,8 @@
                              [[(dec row) col] [(inc row) col]
                               [row (dec col)] [row (inc col)]]))
         distance (into {} (map (juxt :state :depth))
-                       (search/bfs neighbours starts
-                                   {:extensions [search/depth-extension]}))]
+                       (ss/bfs neighbours starts
+                                   {:extensions [ss/depth-extension]}))]
     (is (= [[0 0 0] [0 1 0] [1 2 1]]
            (mapv (fn [row]
                    (mapv #(distance [row %]) (range (count (first grid)))))
@@ -153,8 +153,8 @@
             (let [component (into {}
                                   (map (fn [{:keys [state depth]}]
                                          [state (mod depth 2)]))
-                                  (search/bfs adjacency [root]
-                                              {:extensions [search/depth-extension]}))]
+                                  (ss/bfs adjacency [root]
+                                              {:extensions [ss/depth-extension]}))]
               (if (some (fn [[state colour]]
                           (some #(= colour (component %)) (adjacency state)))
                         component)
@@ -175,13 +175,13 @@
                           (website state)))]
     (is (= [[:home 0] [:about 1] [:shop 1] [:team 2] [:item 2]]
            (mapv (juxt :state :depth)
-                 (search/bfs website-links [:home]
+                 (ss/bfs website-links [:home]
                              {:project identity
-                              :extensions [search/depth-extension]}))))
+                              :extensions [ss/depth-extension]}))))
     (is (= [[:home 0] [:about 1] [:shop 1] [:team 2] [:item 2]]
            (mapv (juxt :state :depth)
-                 (search/bfs website [:home]
-                             {:extensions [search/depth-extension]
+                 (ss/bfs website [:home]
+                             {:extensions [ss/depth-extension]
                               :expand? #(< (:depth %) 2)}))))))
 
 (defn- knight-moves [[x y]]
@@ -195,8 +195,8 @@
   (is (= 6
          (:depth (first (filter
                          #(= [7 7] (:state %))
-                         (search/bfs knight-moves [[0 0]]
-                                     {:extensions [search/depth-extension]})))))))
+                         (ss/bfs knight-moves [[0 0]]
+                                     {:extensions [ss/depth-extension]})))))))
 
 (defn- jug-moves [[a b]]
   (let [capacity-a 3 capacity-b 5
@@ -209,8 +209,8 @@
 (deftest four-litres-in-two-jugs
   (let [route (first (filter
                       (fn [{[_ b] :state}] (= 4 b))
-                      (search/bfs jug-moves [[0 0]]
-                                  {:extensions [search/path-extension]})))]
+                      (ss/bfs jug-moves [[0 0]]
+                                  {:extensions [ss/path-extension]})))]
     (is (= 7 (count (:path route))))))
 
 (deftest missionaries-and-cannibals-cross-in-eleven-trips
@@ -231,8 +231,8 @@
                             :when (safe-state? next)]
                         next)))
         goal (first (filter #(= [0 0 1] (:state %))
-                            (search/bfs crossings [[3 3 0]]
-                                        {:extensions [search/depth-extension]})))]
+                            (ss/bfs crossings [[3 3 0]]
+                                        {:extensions [ss/depth-extension]})))]
     (is (= 11 (:depth goal)))))
 
 (deftest fewest-perfect-square-subtractions
@@ -241,8 +241,8 @@
           (for [root (range 1 (inc (long (Math/sqrt remaining))))]
             (- remaining (* root root))))
         route (first (filter #(zero? (:state %))
-                             (search/bfs square-subtractions [12]
-                                         {:extensions [search/path-extension]})))]
+                             (ss/bfs square-subtractions [12]
+                                         {:extensions [ss/path-extension]})))]
     (is (= [12 8 4 0] (:path route)))))
 
 (deftest open-a-combination-lock-in-fewest-turns
@@ -258,8 +258,8 @@
                            :when (not (blocked-codes next-code))]
                        next-code))
         turns (first (filter #(= "0202" (:state %))
-                             (search/bfs lock-turns ["0000"]
-                                         {:extensions [search/depth-extension]})))]
+                             (ss/bfs lock-turns ["0000"]
+                                         {:extensions [ss/depth-extension]})))]
     (is (= 6 (:depth turns)))))
 
 (deftest solve-a-sliding-tile-puzzle-with-bfs
@@ -277,8 +277,8 @@
                                  (+ (* r 3) c) 0))))
         route (first (filter
                       #(= [1 2 3 4 5 0] (:state %))
-                      (search/bfs slide-blank [[4 1 3 0 2 5]]
-                                 {:extensions [search/path-extension]})))]
+                      (ss/bfs slide-blank [[4 1 3 0 2 5]]
+                                 {:extensions [ss/path-extension]})))]
     (is (= [[4 1 3 0 2 5]
             [0 1 3 4 2 5]
             [1 0 3 4 2 5]
@@ -304,8 +304,8 @@
                       :when (not (wall? next-box))]
                   [next-player next-box]))
         goal (first (filter #(= [2 4] (second (:state %)))
-                            (search/bfs moves [[[1 1] [2 2]]]
-                                        {:extensions [search/depth-extension]})))]
+                            (ss/bfs moves [[[1 1] [2 2]]]
+                                        {:extensions [ss/depth-extension]})))]
     (is (= 3 (:depth goal)))))
 
 (deftest plan-around-the-sussman-anomaly
@@ -319,9 +319,9 @@
                     (-> without (disj target) (conj (conj target block)))
                     (conj without [block]))))
         plan (first (filter #(= #{[:c :b :a]} (:state %))
-                            (search/bfs moves [#{[:a :c] [:b]}]
-                                        {:extensions [search/depth-extension
-                                                      search/path-extension]})))]
+                            (ss/bfs moves [#{[:a :c] [:b]}]
+                                        {:extensions [ss/depth-extension
+                                                      ss/path-extension]})))]
     (is (= 3 (:depth plan)))
     (is (= [[[:a :c] [:b]] [[:a] [:b] [:c]]
             [[:a] [:c :b]] [[:c :b :a]]]
@@ -340,8 +340,8 @@
 (deftest word-ladder-shortest-route
   (let [route (first (filter
                       #(= "warm" (:state %))
-                      (search/bfs ladder-neighbours ["cold"]
-                                  {:extensions [search/path-extension]})))]
+                      (ss/bfs ladder-neighbours ["cold"]
+                                  {:extensions [ss/path-extension]})))]
     (is (= 5 (count (:path route))))))
 
 (deftest enumerate-simple-routes-through-a-cyclic-map
@@ -349,8 +349,8 @@
                   :park [:market :museum]
                   :market [:park :museum]
                   :museum []}
-        routes (->> (search/simple-paths city-map [:home]
-                                         {:extensions [search/path-extension]})
+        routes (->> (ss/simple-paths city-map [:home]
+                                         {:extensions [ss/path-extension]})
                     (filter #(= :museum (:state %)))
                     (map :path)
                     vec)]
@@ -364,11 +364,11 @@
   (let [walk-graph {:a [:b]
                     :b [:a :c]
                     :c [:a]}
-        walks (->> (search/bfs walk-graph [:a]
+        walks (->> (ss/bfs walk-graph [:a]
                                {:visit-key nil
                                 :expand? #(< (:depth %) 3)
-                                :extensions [search/depth-extension
-                                             search/path-extension]})
+                                :extensions [ss/depth-extension
+                                             ss/path-extension]})
                    (filter #(= 3 (:depth %)))
                    (map :path)
                    set)]
@@ -383,9 +383,9 @@
                   [next (conj visited next)]))
         starts (map (fn [node] [node #{node}]) (range (count graph)))
         goal (first (filter #(= full (second (:state %)))
-                            (search/bfs moves starts
-                                        {:extensions [search/depth-extension
-                                                      search/path-extension]})))]
+                            (ss/bfs moves starts
+                                        {:extensions [ss/depth-extension
+                                                      ss/path-extension]})))]
     (is (= 4 (:depth goal)))
     (is (= full (second (:state goal))))))
 
@@ -409,10 +409,10 @@
         violating-visit
         (fn [wait?]
           (first (filter violation?
-                         (search/bfs (peterson wait?) [start]
-                                     {:extensions [search/depth-extension
-                                                   search/path-extension]}))))
-        safe-visits (search/bfs (peterson true) [start])
+                         (ss/bfs (peterson wait?) [start]
+                                     {:extensions [ss/depth-extension
+                                                   ss/path-extension]}))))
+        safe-visits (ss/bfs (peterson true) [start])
         counterexample (violating-visit false)]
     (is (nil? (first (filter violation? safe-visits))))
     (is (= 6 (:depth counterexample)))
@@ -427,11 +427,11 @@
                       :museum []}
         route (first (filter
                       #(= :museum (:state %))
-                      (search/best-first travel-times [:home]
+                      (ss/best-first travel-times [:home]
                                          {:decode-edge
                                           (fn [[state weight]]
                                             {:state state :weight weight})
-                                          :extensions [search/path-extension]})))]
+                                          :extensions [ss/path-extension]})))]
     (is (= {:path [:home :park :village :hill :museum]
             :distance 6}
            (select-keys route [:path :distance])))))
@@ -449,7 +449,7 @@
                                :road [(:state parent)
                                       (:state transition)
                                       (:weight transition)]})}
-        tree (search/best-first graph [:a]
+        tree (ss/best-first graph [:a]
                                 {:decode-edge identity
                                  :extensions [joining-edge]
                                  :priority :joining-edge})]
@@ -469,39 +469,10 @@
                                (apply min
                                       (map #(+ (:weight (:via %)) (:cost %))
                                            successors)))})}
-        result (last (search/postorder graph [:s]
+        result (last (ss/postorder graph [:s]
                                          {:decode-edge identity
                                           :extensions [cost]}))]
     (is (= -2 (:cost result)))))
-
-(deftest relax-negative-edge-weights-and-detect-a-negative-cycle
-  (let [nodes #{:s :a :b :t}
-        edges [[:s :a 4] [:s :b 3] [:a :b -2]
-               [:a :t 5] [:b :t 1]]
-        relax-edge (fn [distances [from to weight]]
-                     (if-some [from-distance (distances from)]
-                       (update distances to
-                               #(if (some? %)
-                                  (min % (+ from-distance weight))
-                                  (+ from-distance weight)))
-                       distances))
-        bellman-ford
-        (fn [vertices edges]
-          (let [relax (fn [distances]
-                        (reduce relax-edge distances edges))
-                distances (nth (iterate relax {:s 0})
-                               (dec (count vertices)))
-                negative-cycle?
-                (some (fn [[from to weight]]
-                        (when-some [from-distance (distances from)]
-                          (when-some [to-distance (distances to)]
-                            (< (+ from-distance weight) to-distance))))
-                      edges)]
-            (if negative-cycle? :negative-cycle distances)))]
-    (is (= {:s 0 :a 4 :b 2 :t 3} (bellman-ford nodes edges)))
-    (is (= :negative-cycle
-           (bellman-ford #{:s :a :b}
-                         [[:s :a 1] [:a :b -2] [:b :a 1]])))))
 
 (deftest minimize-the-largest-climb-on-a-route
   (let [heights [[1 2 2] [3 8 2] [5 3 5]]
@@ -515,11 +486,11 @@
                         {:state [next-row next-col]
                          :climb (abs (- there here))}))
         effort-extension
-        (search/accumulate :effort (constantly 0)
+        (ss/accumulate :effort (constantly 0)
                            (fn [effort transition]
                              (max effort (:climb transition))))
         route (first (filter #(= [2 2] (:state %))
-                             (search/best-first grid-climbs [[0 0]]
+                             (ss/best-first grid-climbs [[0 0]]
                                                 {:decode-edge identity
                                                  :extensions [effort-extension]
                                                  :priority :effort})))]
@@ -545,9 +516,9 @@
                 :when next-phase]
             {:state [to next-phase] :label label}))
         route (first (filter #(= [:target :accept] (:state %))
-                             (search/bfs matching-edges [[:start :need-a]]
+                             (ss/bfs matching-edges [[:start :need-a]]
                                          {:decode-edge identity
-                                          :extensions [search/trail-extension]})))]
+                                          :extensions [ss/trail-extension]})))]
     (is (= ["a" "b"] (mapv :label (rest (:trail route)))))))
 
 (deftest two-travelers-meet-in-minimum-elapsed-time
@@ -565,11 +536,11 @@
              :weight (max time-a time-b)}))
         result (first (filter (fn [{[city-a city-b] :state}]
                                 (= city-a city-b))
-                              (search/best-first
+                              (ss/best-first
                                simultaneous-moves
                                [[:west :east]]
                                {:decode-edge identity
-                                :extensions [search/path-extension]})))]
+                                :extensions [ss/path-extension]})))]
     (is (= {:path [[:west :east] [:ridge :market] [:town :town]]
             :distance 4}
            (select-keys result [:path :distance])))))
@@ -591,7 +562,7 @@
                                 :selected (conj selected id)}
                         :weight duration})))
         presentation (first (filter #(empty? (get-in % [:state :remaining]))
-                                    (search/best-first
+                                    (ss/best-first
                                      add-clip
                                      [{:remaining required-topics :selected []}]
                                      {:decode-edge identity})))]
@@ -611,12 +582,12 @@
             [to (- arrives distance)]))
         route (first (filter
                       #(= :museum (:state %))
-                      (search/best-first
+                      (ss/best-first
                        catchable-trips [:home]
                        {:project identity
                         :decode-edge (fn [[state weight]]
                                        {:state state :weight weight})
-                        :extensions [search/path-extension]})))]
+                        :extensions [ss/path-extension]})))]
     (is (= {:path [:home :junction :museum] :distance 20}
            (select-keys route [:path :distance])))))
 
@@ -632,11 +603,11 @@
                          :museum []}
         route (first (filter
                       #(= :museum (:state %))
-                      (search/best-first
+                      (ss/best-first
                        labelled-travel [:home]
                        {:decode-edge (fn [[state weight mode]]
                                        {:state state :weight weight :mode mode})
-                        :extensions [search/trail-extension]})))]
+                        :extensions [ss/trail-extension]})))]
     (is (= {:trail [{:state :home}
                     {:state :park :weight 1 :mode :tram}
                     {:state :village :weight 1 :mode :foot}
@@ -654,12 +625,12 @@
         remaining-time {:home 3 :hill 4 :river 2 :market 2 :goal 0}
         route (first (filter
                       #(= :goal (:state %))
-                      (search/best-first
+                      (ss/best-first
                        delivery-routes [:home]
                        {:decode-edge (fn [[state weight]]
                                        {:state state :weight weight})
-                        :extensions [search/path-extension
-                                     search/distance-extension]
+                        :extensions [ss/path-extension
+                                     ss/distance-extension]
                         :priority (fn [{:keys [state distance]}]
                                     (+ distance (remaining-time state)))})))]
     (is (= {:path [:home :river :goal]
@@ -671,7 +642,7 @@
                      :detour [[:junction 1]]
                      :junction [[:goal 3]]
                      :goal []}
-        fuel-left (search/accumulate :fuel-left (constantly 5)
+        fuel-left (ss/accumulate :fuel-left (constantly 5)
                                      (fn [fuel transition]
                                        (- fuel (:fuel-used transition))))
         affordable-routes (fn [{:keys [state fuel-left]}]
@@ -680,14 +651,14 @@
                                     (fuel-routes state)))
         visit (first (filter
                       #(= :goal (:state %))
-                      (search/bfs affordable-routes [:home]
+                      (ss/bfs affordable-routes [:home]
                                  {:project identity
                                   :visit-key (juxt :state :fuel-left)
                                   :decode-edge
                                   (fn [[state fuel-used]]
                                     {:state state :fuel-used fuel-used})
                                   :extensions [fuel-left
-                                               search/path-extension]})))]
+                                               ss/path-extension]})))]
     (is (= {:path [:home :detour :junction :goal]
             :fuel-left 0}
            (select-keys visit [:path :fuel-left])))))
@@ -720,10 +691,10 @@
         result (first (filter #(and (= base (get-in % [:state :position]))
                                     (= #{:amber :cobalt}
                                        (get-in % [:state :collected])))
-                              (search/bfs successors [initial]
+                              (ss/bfs successors [initial]
                                           {:decode-edge identity
                                            :extensions
-                                           [search/depth-extension]})))]
+                                           [ss/depth-extension]})))]
     (is (= 12 (:depth result)))))
 
 (deftest order-build-tasks-after-prerequisites
@@ -733,7 +704,7 @@
                             :base []}]
     (is (= [:base :lib :config :app]
            (mapv :state
-                 (search/postorder task-prerequisites [:app]))))))
+                 (ss/postorder task-prerequisites [:app]))))))
 
 (deftest schedule-ordered-preparation-with-postorder-next
   (let [prep-minutes {:chop-vegetables 4
@@ -749,7 +720,7 @@
                :mix-dressing []
                :plate-food []}]
     (is (= [[:chop-vegetables 0] [:mix-dressing 4] [:plate-food 7]]
-           (->> (search/postorder graph [:lunch]
+           (->> (ss/postorder graph [:lunch]
                                     {:extensions [prep-schedule]})
                 (filter #(contains? % :starts-at))
                 (mapv (juxt :state :starts-at)))))))
@@ -770,7 +741,7 @@
     (is (= [{:state :local-copy :available? true}
             {:state :restore :source :local-copy}]
            (mapv #(select-keys % [:state :available? :source])
-                 (search/postorder graph [:restore]
+                 (ss/postorder graph [:restore]
                                      {:extensions [restore-extension]}))))))
 
 (deftest count-prerequisites-bottom-up-with-postorder-exit
@@ -787,7 +758,7 @@
                             :parse []}]
     (is (= [[:parse 1] [:compile 2] [:docs 2] [:app 4]]
            (mapv (juxt :state :size)
-                 (search/postorder task-prerequisites [:app]
+                 (ss/postorder task-prerequisites [:app]
                                      {:extensions [task-count]}))))))
 
 (deftest count-shortest-routes-by-composing-bfs-and-postorder
@@ -800,8 +771,8 @@
                      :h [:e]
                      :e []}
         depth (into {} (map (juxt :state :depth))
-                    (search/bfs route-graph [:a]
-                                {:extensions [search/depth-extension]}))
+                    (ss/bfs route-graph [:a]
+                                {:extensions [ss/depth-extension]}))
         shortest-edges (fn [state]
                          (filter #(= (inc (depth state)) (depth %))
                                  (route-graph state)))
@@ -810,7 +781,7 @@
                  {:count (if (= state :e)
                            1
                            (transduce (map :count) + 0 successors))})}
-        visits (search/postorder shortest-edges [:a]
+        visits (ss/postorder shortest-edges [:a]
                                    {:extensions [count-routes]})]
     (is (= 2 (:count (last visits))))))
 
@@ -826,7 +797,7 @@
                  {:ways (if (= start (count text))
                           1
                           (transduce (map :ways) + 0 suffixes))})}
-        result (last (search/postorder next-cuts [0]
+        result (last (ss/postorder next-cuts [0]
                                          {:extensions [count-ways]}))]
     (is (= 2 (:ways result)))))
 
@@ -858,7 +829,7 @@
                              (even? (count (remove nil? board)))
                              (apply max (map :value children))
                              :else (apply min (map :value children)))}))}
-        positions (search/postorder legal-moves
+        positions (ss/postorder legal-moves
                                       [(vec (repeat 9 nil))]
                                       {:extensions [game-value]})]
     (is (= 5478 (count positions)))
@@ -873,7 +844,7 @@
     (is (= [[:database [[:api :requires true]]]
             [:api [[:database :requires false]]]]
            (mapv (juxt :state :edges)
-                 (search/postorder {:api [[:database :requires]]
+                 (ss/postorder {:api [[:database :requires]]
                                       :database [[:api :requires]]}
                                      [:api]
                                      {:decode-edge (fn [[state kind]]
@@ -900,7 +871,7 @@
                      (map (fn [target]
                             {:state target :value outgoing})
                           successors)))
-        progress (search/propagate transfer
+        progress (ss/propagate transfer
                                    {:entry #{}}
                                    {:project identity
                                     :decode-edge identity
