@@ -1,0 +1,14 @@
+.cpcache/
+target/
+.clj-kondo/
+.lsp/
+
+# Experimental archive and prototypes
+/experimental/
+
+# OpTeX build output
+*.aux
+*.log
+*.pdf
+*.ref
+*.toc

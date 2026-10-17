@@ -1,0 +1,55 @@
+%% Syntax highlighting for Clojure listings in the State-space manual.
+
+\_codedecl \_hisyntaxclojure {Syntax highlighting for Clojure sources}
+
+\_newtoks \_hisyntaxclojure  \_newtoks \_hicolorsclojure
+
+\_global\_def\_clojurekeywordcolor{\_setrgbcolor{0.81 0.13 0.18}}
+\_global\_def\_clojurestringcolor{\_setrgbcolor{0.04 0.19 0.41}}
+\_global\_def\_clojurecommentcolor{\_setrgbcolor{0.43 0.47 0.51}}
+\_global\_def\_clojureconstantcolor{\_setrgbcolor{0.02 0.31 0.68}}
+\_global\_def\_clojurefunctioncolor{\_setrgbcolor{0.51 0.31 0.87}}
+
+\_global\_hicolorsclojure={%
+   \_hicolor K \_clojurekeywordcolor   % Special forms and declaration forms
+   \_hicolor S \_clojurestringcolor    % Strings
+   \_hicolor C \_clojurecommentcolor   % Comments
+   \_hicolor N \_clojureconstantcolor  % Numbers
+   \_hicolor L \_clojureconstantcolor  % Booleans and nil
+   \_hicolor Q \_clojureconstantcolor  % Keywords
+   \_hicolor G \_clojurefunctioncolor  % Defined vars and namespaces
+   \_hicolor O \Black                  % Delimiters and reader macros
+}
+\_global\_hisyntaxclojure={%
+   \_the\_hicolorsclojure
+   \_let\c=\_relax \_let\e=\_relax \_let\o=\_relax
+   \_replthis{\_string\"}{{\_string\"}}%
+   \_replfromto{\b\n;;}{^^J}{\b\n\z C{;;#1}^^J}%
+   \_replfromto{"}{"}{\x S{"#1"}}%
+   \_replfromto{;}{^^J}{\z C{;#1}^^J}%
+   \_edef\_tmpa{%
+      ()\_string[\_string]\_string{\_string}%
+      \_string'\_string@\_string^\_string~\_string`%
+   }%
+   \_ea\_foreach\_tmpa
+      \_do{\_replthis{#1}{\n\o{#1}\n}}%
+   \_foreach
+      {declare}{def}{definline}{definterface}{defmacro}{defmethod}%
+      {defmulti}{defn}{defn-}{defonce}{defprotocol}{defrecord}{defstruct}%
+      {deftype}{ns}%
+      \_do{\_replfromto{\n#1\n\ \n}{\n}{\n\z K{#1}\n\ \n\z G{##1}\n}}%
+   \_foreach
+      {catch}{do}{finally}{fn}{fn*}{if}{let}{let*}%
+      {loop}{loop*}{monitor-enter}{monitor-exit}{new}{quote}{recur}%
+      {set!}{throw}{try}{var}%
+      \_do{\_replthis{\n#1\n}{\z K{#1}}}%
+   \_replfromto{\n:}{\n}{\z Q{:#1}}%
+   \_foreach {false}{nil}{true}
+      \_do{\_replthis{\n#1\n}{\z L{#1}}}%
+   \_foreach 0123456789
+      \_do{\_replfromto{\n#1}{\n}{\c#1##1\e}}%
+   \_def\o#1{\z O{#1}}%
+   \_def\c#1\e{\z N{#1}}%
+}
+
+\_endcode

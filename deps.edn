@@ -1,0 +1,14 @@
+{:paths ["src"]
+ :deps {org.clojure/clojure {:mvn/version "1.12.6"}}
+ :aliases
+ {:test {:extra-paths ["test"]
+         :main-opts ["-m" "state-space.test-runner"]}
+  :build {:deps {io.github.clojure/tools.build {:mvn/version "0.10.14"}}
+          :ns-default build}
+  :deploy {:extra-deps {slipset/deps-deploy {:mvn/version "0.2.5"}}
+           :exec-fn deps-deploy.deps-deploy/deploy
+           :exec-args {:installer :remote
+                       :sign-releases? false
+                       :artifact "target/state-space.jar"
+                       :pom-file
+                       "target/classes/META-INF/maven/org.clojars.cao/state-space/pom.xml"}}}}
