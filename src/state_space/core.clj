@@ -143,7 +143,15 @@
   containing :state; DFS uses that destination. Ordered :extensions add
   derived visit values and can inspect all decoded transition fields.
   Extensions are maps with :start and :next callbacks returning visit-context
-  maps. Inputs are the caller's responsibility and are not validated."
+  maps. Callbacks must preserve :state. Custom context fields merge in
+  extension order, with later fields replacing earlier ones; use namespaced
+  keys for independently reusable extensions to avoid accidental collisions.
+  Postorder reserves :previous, :via, and :back-edge for its callback views.
+  :start and :next prepare candidates before duplicate or path-repeat
+  rejection, so they may run for visits that are never emitted. Prefer pure
+  callbacks; use result consumption for actions on emitted visits.
+  Inputs are the caller's responsibility and are not validated; violating
+  these expectations may produce unexpected results."
   ([space starts]
    (dfs space starts {}))
   ([space starts options]
@@ -221,18 +229,28 @@
   A node is marked known when first entered, so cyclic graphs terminate: a
   back edge is simply ignored, and the result is then the plain DFS
   post-order (a valid topological order exactly when the reachable graph is
-  a DAG). Options are as in dfs, but :visit-key must not be nil.
+  a DAG). Options are as in dfs, but :visit-key must not be nil. Its result
+  must remain stable from entry through completion: :exit callbacks must not
+  change fields in a way that changes the visit key.
 
   Extensions may also define :exit, a function of a visit and the visits of
   its successors returning a map merged into the visit as it is emitted: a
   bottom-up computation over the successors' own results. Each successor
   appears as the visit that first reached that node: finished, with its :exit
   values, or, for a back edge to a node still in progress, with top-down
-  values only. Successors are reported in the order the space produced them,
+  values only. Equal visit keys must identify interchangeable computations:
+  include relevant route context in the key when expansion, :more? pruning,
+  or computed results depend on it. A cached result from one budget or
+  pruning window is not automatically valid under another; later arrivals
+  do not recompute it. These are caller expectations, not runtime checks.
+  Successors are reported in the order the space produced them,
   and each carries two keys describing the edge it was reached by in this
   particular parent: :via, the decoded transition (so edge weights and labels
   are available even when the node was first reached through another edge),
-  and :back-edge, true when the successor was still in progress.
+  and :back-edge, true when the successor was still in progress. Extensions
+  must not define :previous, :via, or :back-edge as their own context fields;
+  these keys are reserved for postorder's callback views, not guaranteed
+  fields on emitted visits. These expectations are not checked at runtime.
 
   Successors are consumed and decoded one at a time. Callbacks may also see
   siblings finished so far: :next receives the parent with a :previous key,
@@ -338,8 +356,12 @@
   The first result is {:values initial-values :changes []}; it has no
   :processed key because no state has been processed yet. Each later record
   contains the updated :values map, its :processed state, and :changes, a
-  vector of {:state state :value value} maps for contributions that changed an
-  accumulated value. States whose values change are scheduled for processing
+  vector of {:state state :value value} maps recording destination updates in
+  transition order, including newly discovered states even at :bottom.
+  A destination may occur more than once, with its accumulated value after
+  each update; contributions leaving a known value unchanged add no entry.
+  The :values map contains the values after all transitions for that record.
+  States whose values change are scheduled for processing
   again; a pending state is queued only once. The result is finite exactly
   when the worklist becomes empty. Exhaust it or take a prefix to observe
   progress; (last ...) returns the final values if propagation terminates.
@@ -434,7 +456,7 @@
    (successors-of space opts visit)))
 
 (defn best-first
-  "Lazily yields visits in nondecreasing priority, best-first.
+  "Lazily selects the lowest-priority pending visit, best-first.
 
   By default the priority is :distance, giving Dijkstra's shortest-path
   order. This default automatically enables distance-extension. Each
@@ -446,9 +468,11 @@
   or an extension-provided edge weight for Prim's algorithm. Each visit key is
   settled at most once, at the best priority offered for that key before
   settlement, so the priority must suit the problem (e.g. a consistent
-  heuristic for A*); that is the caller's responsibility. A custom priority
-  does not enable distance-extension; include it explicitly when the priority
-  or results need cumulative distance. Equal priorities are emitted FIFO in
+  heuristic for A*); that is the caller's responsibility. Newly discovered
+  candidates may have lower priorities than previously emitted visits, so
+  custom priorities do not generally produce globally sorted results.
+  A custom priority does not enable distance-extension; include it explicitly
+  when the priority or results need cumulative distance. Equal priorities are emitted FIFO in
   enqueue order; this order depends on the iteration order of starts and
   successors. On infinite spaces, finite non-negative weights alone do not
   guarantee that a positive-cost result will eventually be emitted: an
@@ -458,7 +482,9 @@
   receive a visit map containing :state and extension values, and :visit-key
   must not be nil.
   Starts and each expanded state's transitions must be finite. Each result
-  contains :state and extension values."
+  contains :state and extension values. Starting states are consumed and
+  initialized only when the result is consumed; all starts are queued before
+  the first visit is selected."
   ([space starts]
    (best-first space starts {}))
   ([space starts options]
@@ -490,10 +516,11 @@
                                      (relax space opts visit settled
                                             [best queue order])]
                                  (search best settled queue order))))))))))]
-       (let [[best queue order]
-             (reduce (fn [state start]
-                       (enqueue opts (initialize-visit extensions {:state start})
-                                #{} state))
-                     [{} (sorted-map) 0]
-                     starts)]
-         (search best #{} queue order))))))
+       (lazy-seq
+        (let [[best queue order]
+              (reduce (fn [state start]
+                        (enqueue opts (initialize-visit extensions {:state start})
+                                 #{} state))
+                      [{} (sorted-map) 0]
+                      starts)]
+          (search best #{} queue order)))))))

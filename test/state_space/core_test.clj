@@ -154,6 +154,24 @@
     (is (= [:node] @processed))
     (is (= [[]] (mapv :changes (rest progress))))))
 
+(deftest propagation-records-successive-updates-to-the-same-destination
+  (let [progress (vec (search/propagate
+                       {:start [{:state :next :value #{:first}}
+                                {:state :next :value #{:second}}
+                                {:state :next :value #{:first}}]}
+                       {:start #{}}
+                       {:decode-edge identity
+                        :bottom #{}
+                        :join set/union}))]
+    (is (= [{:state :next :value #{:first}}
+            {:state :next :value #{:first :second}}]
+           (:changes (second progress))))
+    (is (= {:start #{} :next #{:first :second}}
+           (:values (second progress))))
+    (is (= [:start :next] (mapv :processed (rest progress))))
+    (is (= [] (:changes (last progress))))
+    (is (= (:values (second progress)) (:values (last progress))))))
+
 (deftest propagation-schedules-a-new-state-even-at-bottom
   (let [progress (search/propagate {:start [:empty]
                                     :empty [:done]
@@ -163,6 +181,8 @@
                                     :join set/union})]
     (is (= #{:start :empty :done}
            (set (keys (:values (last progress))))))
+    (is (= [{:state :empty :value #{}}]
+           (:changes (second progress))))
     (is (= [:start :empty :done]
            (mapv :processed (rest progress))))))
 
@@ -352,6 +372,20 @@
       (is (not (contains? without-distance :distance)))
       (is (= 0 (:distance with-distance))))))
 
+(deftest best-first-selects-the-lowest-pending-not-globally-increasing-priority
+  (let [roads {:a [{:state :b :weight 2} {:state :c :weight 5}]
+               :b [{:state :a :weight 2} {:state :c :weight 1}]
+               :c [{:state :a :weight 5} {:state :b :weight 1}]}
+        joining-edge {:start (fn [_] {:joining-edge 0})
+                      :next (fn [_ transition _]
+                              {:joining-edge (:weight transition)})}]
+    (is (= [[:a 0] [:b 2] [:c 1]]
+           (mapv (juxt :state :joining-edge)
+                 (search/best-first roads [:a]
+                                    {:decode-edge identity
+                                     :extensions [joining-edge]
+                                     :priority :joining-edge}))))))
+
 (deftest best-first-breaks-equal-priorities-in-enqueue-order
   (is (= [:start :first :second :third]
          (mapv :state
@@ -368,6 +402,43 @@
                                             [(inc n)])
                                           [0])))))
     (is (= [0 1 2] @expanded))))
+
+(deftest best-first-defers-starts-until-consumption-and-queues-them-all
+  (let [consumed (atom [])
+        initialized (atom [])
+        expanded (atom [])
+        starts (map (fn [state]
+                      (swap! consumed conj state)
+                      state)
+                    [5 1 3])
+        visits (search/best-first
+                (fn [state] (swap! expanded conj state) [])
+                starts
+                {:extensions [{:start (fn [visit]
+                                        (swap! initialized conj (:state visit))
+                                        {})}]
+                 :priority :state})]
+    (is (empty? @consumed))
+    (is (empty? @initialized))
+    (is (empty? @expanded))
+    (is (= {:state 1} (first visits)))
+    (is (= [5 1 3] @consumed))
+    (is (= [5 1 3] @initialized))
+    (is (empty? @expanded))
+    (is (= [1 3 5] (mapv :state visits)))
+    (is (= [5 1 3] @initialized))
+    (is (= [1 3 5] @expanded))))
+
+(deftest best-first-defers-start-callback-errors-until-consumption
+  (let [error (ex-info "Start initialization failed" {})
+        visits (search/best-first
+                {} [:start]
+                {:extensions [{:start (fn [_] (throw error))}]})]
+    (is (identical? error
+                    (try
+                      (first visits)
+                      (catch clojure.lang.ExceptionInfo actual
+                        actual))))))
 
 (deftest best-first-can-use-a-consistent-heuristic
   (let [roads {:home [[:hill 1] [:river 2]]
@@ -535,6 +606,97 @@
            (vec (search/dfs {:a [:b] :b []}
                             [:a]
                             {:extensions [steps-extension]}))))))
+
+(deftest start-callbacks-run-before-duplicate-start-rejection
+  (doseq [algorithm [search/dfs search/bfs search/postorder search/best-first]]
+    (let [initialized (atom [])
+          visits (vec (algorithm {} [:root :root]
+                                 {:extensions
+                                  [{:start (fn [visit]
+                                             (swap! initialized conj (:state visit))
+                                             {})}]}))]
+      (is (= [:root] (mapv :state visits)))
+      (is (= [:root :root] @initialized)))))
+
+(deftest next-callbacks-run-before-duplicate-or-path-repeat-rejection
+  (doseq [algorithm [search/dfs search/bfs search/simple-paths
+                     search/postorder search/best-first]]
+    (let [prepared (atom [])
+          visits (vec (algorithm
+                       {:root [:child] :child [:root]} [:root]
+                       {:extensions
+                        [{:next (fn [parent transition visit]
+                                  (swap! prepared conj
+                                         [(:state parent)
+                                          (:state transition)
+                                          (:state visit)])
+                                  {})}]}))]
+      (is (= #{:root :child} (set (map :state visits))))
+      (is (= 2 (count visits)))
+      (is (= [[:root :child :child] [:child :root :root]]
+             @prepared)))))
+
+(deftest extensions-compose-in-order-and-can-replace-custom-fields
+  (let [initial {:start (fn [_] {::value 1})
+                 :next (fn [parent _ _]
+                         {::value (inc (::value parent))})}
+        adjust {:start (fn [visit]
+                          {::value (* 10 (::value visit))})
+                :next (fn [_ _ visit]
+                        {::value (* 10 (::value visit))})}]
+    (doseq [algorithm [search/dfs search/bfs search/simple-paths
+                       search/postorder search/best-first]]
+      (let [visits (algorithm {:a [:b]} [:a]
+                             {:extensions [initial adjust]})]
+        (is (= {:a 10 :b 110}
+               (into {} (map (juxt :state ::value)) visits)))))))
+
+(deftest postorder-exit-composes-with-stable-custom-identity-and-shared-results
+  (let [identity-extension {:start (fn [visit] {::id (:state visit)})
+                            :next (fn [_ _ visit] {::id (:state visit)})}
+        count-extension {:exit (fn [_ children]
+                                 {::size (inc (reduce + 0 (map ::size children)))})}
+        adjust-extension {:exit (fn [visit _]
+                                  {::original-size (::size visit)
+                                   ::size (* 10 (::size visit))})}
+        visits (vec (search/postorder
+                     {:root [:left :right]
+                      :left [:shared]
+                      :right [:shared]}
+                     [:root]
+                     {:visit-key ::id
+                      :extensions [identity-extension
+                                   count-extension
+                                   adjust-extension]}))]
+    (is (= [:shared :left :right :root] (mapv :state visits)))
+    (is (= (mapv :state visits) (mapv ::id visits)))
+    (is (= [1 11 11 221] (mapv ::original-size visits)))
+    (is (= [10 110 110 2210] (mapv ::size visits)))))
+
+(deftest postorder-context-key-keeps-depth-pruned-results-separate
+  (doseq [pruning [:expand? :more?]]
+    (let [subtree-size
+          (cond-> {:exit (fn [_ children]
+                           {::size (inc (reduce + 0 (map ::size children)))})}
+            (= pruning :more?)
+            (assoc :more? (fn [visit _] (< (:depth visit) 2))))
+          options
+          (cond-> {:visit-key (juxt :state :depth)
+                   :extensions [search/depth-extension subtree-size]}
+            (= pruning :expand?)
+            (assoc :expand? #(< (:depth %) 2)))
+          visits (vec (search/postorder
+                       {:root [:detour :shared]
+                        :detour [:shared]
+                        :shared [:leaf]}
+                       [:root]
+                       options))]
+      (is (= [[2 1] [1 2]]
+             (mapv (juxt :depth ::size)
+                   (filter #(= :shared (:state %)) visits))))
+      (is (= [:leaf]
+             (mapv :state (filter #(= :leaf (:state %)) visits))))
+      (is (= 5 (::size (last visits)))))))
 
 (deftest projection-can-give-a-space-the-whole-visit
   (let [successors (fn [{:keys [state depth]}]

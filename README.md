@@ -5,8 +5,13 @@ simple-path, post-order traversal, and best-first search plus worklist-based
 state propagation over explicit or generated state spaces.
 
 The [State-space documentation PDF](https://github.com/cao-/state-space/releases/latest/download/state-space.pdf)
-documents the API and includes worked examples. The
-[documentation source](state-space.tex) is also available in this repository.
+describes the algorithms and API. The companion
+[Worked examples PDF](https://github.com/cao-/state-space/releases/latest/download/worked-examples.pdf)
+applies them to a range of problems.
+
+Both PDFs are built from the documentation sources in this repository:
+[state-space.tex](state-space.tex) and
+[worked-examples.tex](worked-examples.tex).
 
 ## Installation
 
