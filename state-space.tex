@@ -378,7 +378,11 @@ The result is a~lazy sequence of progress records, not a~sequence of visits:
 The initial record has no \code{:processed} key because no state has been
 processed. Later records contain the state just processed, the resulting
 \code{:values} map, and a~vector of destination updates in \code{:changes}.
-Use \code{last} only when propagation terminates.
+Updates follow transition order. A~destination can appear more than once,
+with its accumulated value after each update; \code{:values} holds the
+values after all transitions for that record. Contributions that leave a~
+known value unchanged add no entry, but a~newly discovered state is recorded
+even at \code{:bottom}. Use \code{last} only when propagation terminates.
 
 By default the space receives just the state and sends its current value
 unchanged to every successor. To transform that information, pass

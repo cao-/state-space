@@ -154,6 +154,24 @@
     (is (= [:node] @processed))
     (is (= [[]] (mapv :changes (rest progress))))))
 
+(deftest propagation-records-successive-updates-to-the-same-destination
+  (let [progress (vec (search/propagate
+                       {:start [{:state :next :value #{:first}}
+                                {:state :next :value #{:second}}
+                                {:state :next :value #{:first}}]}
+                       {:start #{}}
+                       {:decode-edge identity
+                        :bottom #{}
+                        :join set/union}))]
+    (is (= [{:state :next :value #{:first}}
+            {:state :next :value #{:first :second}}]
+           (:changes (second progress))))
+    (is (= {:start #{} :next #{:first :second}}
+           (:values (second progress))))
+    (is (= [:start :next] (mapv :processed (rest progress))))
+    (is (= [] (:changes (last progress))))
+    (is (= (:values (second progress)) (:values (last progress))))))
+
 (deftest propagation-schedules-a-new-state-even-at-bottom
   (let [progress (search/propagate {:start [:empty]
                                     :empty [:done]
@@ -163,6 +181,8 @@
                                     :join set/union})]
     (is (= #{:start :empty :done}
            (set (keys (:values (last progress))))))
+    (is (= [{:state :empty :value #{}}]
+           (:changes (second progress))))
     (is (= [:start :empty :done]
            (mapv :processed (rest progress))))))
 

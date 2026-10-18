@@ -348,8 +348,12 @@
   The first result is {:values initial-values :changes []}; it has no
   :processed key because no state has been processed yet. Each later record
   contains the updated :values map, its :processed state, and :changes, a
-  vector of {:state state :value value} maps for contributions that changed an
-  accumulated value. States whose values change are scheduled for processing
+  vector of {:state state :value value} maps recording destination updates in
+  transition order, including newly discovered states even at :bottom.
+  A destination may occur more than once, with its accumulated value after
+  each update; contributions leaving a known value unchanged add no entry.
+  The :values map contains the values after all transitions for that record.
+  States whose values change are scheduled for processing
   again; a pending state is queued only once. The result is finite exactly
   when the worklist becomes empty. Exhaust it or take a prefix to observe
   progress; (last ...) returns the final values if propagation terminates.
