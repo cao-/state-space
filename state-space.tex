@@ -20,8 +20,8 @@
 State-space is a~Clojure library for lazily exploring graphs and generated
 state spaces. Graph searches yield visits lazily: maps whose \code{:state}
 field contains a~value from the problem domain, with optional information
-about how that state was reached. Examples use \code{vec} to show all visits
-for small searches.
+about how that state was reached. The REPL displays these sequences
+directly; examples use \code{take} to bound infinite searches.
 
 To try the examples from the project directory, start a~REPL with
 \code{clojure -M}; the source directory is on the classpath. Load the library
@@ -86,9 +86,9 @@ they can be passed directly:
    :right [:goal]
    :goal  []})
 
-(vec (ss/dfs graph [:start]))
-;; => [{:state :start} {:state :left}
-;;     {:state :goal} {:state :right}]
+(ss/dfs graph [:start])
+;; => ({:state :start} {:state :left}
+;;     {:state :goal} {:state :right})
 \endtt
 
 The common call shape is \code{(ss/dfs space starts options)}, with the
@@ -134,21 +134,21 @@ track of how it reached a~state, extensions add context fields such as
 options map to include the number of transitions from the start:
 
 \begtt \hisyntax{clojure}
-(vec (ss/dfs graph [:start]
-             {:extensions [ss/depth-extension]}))
-;; => [{:state :start :depth 0} {:state :left :depth 1}
-;;     {:state :goal :depth 2} {:state :right :depth 1}]
+(ss/dfs graph [:start]
+        {:extensions [ss/depth-extension]})
+;; => ({:state :start :depth 0} {:state :left :depth 1}
+;;     {:state :goal :depth 2} {:state :right :depth 1})
 \endtt
 
 The path extension records the states on the route so far. Extensions can
 be combined in the same search:
 
 \begtt \hisyntax{clojure}
-(vec (take 2 (ss/dfs graph [:start]
-                     {:extensions [ss/depth-extension
-                                   ss/path-extension]})))
-;; => [{:state :start :depth 0 :path [:start]}
-;;     {:state :left :depth 1 :path [:start :left]}]
+(take 2 (ss/dfs graph [:start]
+                {:extensions [ss/depth-extension
+                              ss/path-extension]}))
+;; => ({:state :start :depth 0 :path [:start]}
+;;     {:state :left :depth 1 :path [:start :left]})
 \endtt
 
 An extension is a~map of callbacks, not data copied into each visit. For
@@ -195,9 +195,9 @@ first in this graph, while BFS finds the nearer route:
              :near [:goal]
              :goal []})
 
-(vec (ss/bfs routes [:start]))
-;; => [{:state :start} {:state :detour} {:state :near}
-;;     {:state :middle} {:state :goal}]
+(ss/bfs routes [:start])
+;; => ({:state :start} {:state :detour} {:state :near}
+;;     {:state :middle} {:state :goal})
 \endtt
 
 By default, BFS reports each state only on its first arrival. In a~static
@@ -213,11 +213,11 @@ The basic search needs no extensions; each visit contains its state. Add the
 depth extension when the edge-count depth is useful:
 
 \begtt \hisyntax{clojure}
-(vec (ss/bfs routes [:start]
-             {:extensions [ss/depth-extension]}))
-;; => [{:state :start :depth 0} {:state :detour :depth 1}
+(ss/bfs routes [:start]
+        {:extensions [ss/depth-extension]})
+;; => ({:state :start :depth 0} {:state :detour :depth 1}
 ;;     {:state :near :depth 1} {:state :middle :depth 2}
-;;     {:state :goal :depth 2}]
+;;     {:state :goal :depth 2})
 \endtt
 
 To retrieve the shortest route, add the path extension, then use the standard
@@ -263,8 +263,8 @@ first returns visits with just their \code{:state}. Here the repeated
             :b [:c]
             :c [:a]})
 
-(vec (ss/simple-paths paths [:a]))
-;; => [{:state :a} {:state :b} {:state :c} {:state :c}]
+(ss/simple-paths paths [:a])
+;; => ({:state :a} {:state :b} {:state :c} {:state :c})
 \endtt
 
 To see each route prefix explicitly, add the path extension:
@@ -297,11 +297,11 @@ post-order. When edges point from a~task to its prerequisites, prerequisites
 therefore appear first. For example, this gives a~valid build order:
 
 \begtt \hisyntax{clojure}
-(vec (ss/postorder {:package [:compile]
-                          :compile [:parse]
-                          :parse []}
-                         [:package]))
-;; => [{:state :parse} {:state :compile} {:state :package}]
+(ss/postorder {:package [:compile]
+                     :compile [:parse]
+                     :parse []}
+                    [:package])
+;; => ({:state :parse} {:state :compile} {:state :package})
 \endtt
 
 On a~cyclic graph, back edges are ignored for traversal and the search
@@ -365,14 +365,14 @@ For sets of known facts, these are set union and the empty set:
 The result is a~lazy sequence of progress records, not a~sequence of visits:
 
 \begtt \hisyntax{clojure}
-(vec (ss/propagate tiny-space {:start #{:ready}}
-                   {:bottom #{} :join set/union}))
-;; => [{:values {:start #{:ready}} :changes []}
+(ss/propagate tiny-space {:start #{:ready}}
+              {:bottom #{} :join set/union})
+;; => ({:values {:start #{:ready}} :changes []}
 ;;     {:values {:start #{:ready} :next #{:ready}}
 ;;      :processed :start
 ;;      :changes [{:state :next :value #{:ready}}]}
 ;;     {:values {:start #{:ready} :next #{:ready}}
-;;      :processed :next :changes []}]
+;;      :processed :next :changes []})
 \endtt
 
 The initial record has no \code{:processed} key because no state has been
@@ -437,9 +437,9 @@ Dijkstra's search when weights are finite and non-negative:
              :quick [:goal]
              :goal []})
 
-(vec (ss/best-first routes [:home]))
-;; => [{:state :home :distance 0} {:state :slow :distance 1}
-;;     {:state :quick :distance 1} {:state :goal :distance 2}]
+(ss/best-first routes [:home])
+;; => ({:state :home :distance 0} {:state :slow :distance 1}
+;;     {:state :quick :distance 1} {:state :goal :distance 2})
 \endtt
 
 To account for different transition costs, supply \code{:decode-edge},
@@ -455,11 +455,11 @@ defaulting to one when that field is absent:
    :slow [[:goal 1]]
    :goal []})
 
-(vec (ss/best-first weighted-routes [:home]
-                    {:decode-edge (fn [[state weight]]
-                                    {:state state :weight weight})}))
-;; => [{:state :home :distance 0} {:state :quick :distance 1}
-;;     {:state :goal :distance 3} {:state :slow :distance 5}]
+(ss/best-first weighted-routes [:home]
+               {:decode-edge (fn [[state weight]]
+                               {:state state :weight weight})})
+;; => ({:state :home :distance 0} {:state :quick :distance 1}
+;;     {:state :goal :distance 3} {:state :slow :distance 5})
 \endtt
 
 An optional \code{:priority} function can order visits by something other than
@@ -550,12 +550,12 @@ context:
                      :middle [:goal]
                      :goal []})
 
-(vec (ss/dfs context-routes [:start]
-             {:extensions [ss/depth-extension]
-              :visit-key (juxt :state :depth)}))
-;; => [{:state :start :depth 0} {:state :near :depth 1}
+(ss/dfs context-routes [:start]
+        {:extensions [ss/depth-extension]
+         :visit-key (juxt :state :depth)})
+;; => ({:state :start :depth 0} {:state :near :depth 1}
 ;;     {:state :goal :depth 2} {:state :detour :depth 1}
-;;     {:state :middle :depth 2} {:state :goal :depth 3}]
+;;     {:state :middle :depth 2} {:state :goal :depth 3})
 \endtt
 
 Sometimes context should affect which successors are allowed, while each
@@ -574,11 +574,11 @@ by it is still returned:
    :goal [:finish]
    :finish []})
 
-(vec (ss/bfs depth-limited-routes [:start]
-             {:expand? #(< (:depth %) 2)
-              :extensions [ss/depth-extension]}))
-;; => [{:state :start :depth 0} {:state :junction :depth 1}
-;;     {:state :detour :depth 1} {:state :goal :depth 2}]
+(ss/bfs depth-limited-routes [:start]
+        {:expand? #(< (:depth %) 2)
+         :extensions [ss/depth-extension]})
+;; => ({:state :start :depth 0} {:state :junction :depth 1}
+;;     {:state :detour :depth 1} {:state :goal :depth 2})
 \endtt
 
 The second arrival at \code{:junction}, at depth two, is not returned or
@@ -637,13 +637,13 @@ or weights:
   {:start [[:next 7]]
    :next []})
 
-(vec (ss/dfs weighted-graph [:start]
-             {:decode-edge (fn [[state weight]]
-                             {:state state :weight weight})
-              :extensions [ss/trail-extension]}))
-;; => [{:state :start :trail [{:state :start}]}
+(ss/dfs weighted-graph [:start]
+        {:decode-edge (fn [[state weight]]
+                        {:state state :weight weight})
+         :extensions [ss/trail-extension]})
+;; => ({:state :start :trail [{:state :start}]}
 ;;     {:state :next :trail [{:state :start}
-;;                           {:state :next :weight 7}]}]
+;;                           {:state :next :weight 7}]})
 \endtt
 
 Without a~decoder, each raw successor is treated as a~state, even if it is
@@ -667,14 +667,14 @@ started, its label, and the child's state and depth:
                          :to (:state visit)
                          :depth (:depth visit)})})})
 
-(vec (ss/dfs {:home [[:park :walk]] :park []} [:home]
-             {:decode-edge (fn [[state label]]
-                             {:state state :label label})
-              :extensions [ss/depth-extension leg-extension]}))
-;; => [{:state :home :depth 0 :legs [{:to :home :depth 0}]}
+(ss/dfs {:home [[:park :walk]] :park []} [:home]
+        {:decode-edge (fn [[state label]]
+                        {:state state :label label})
+         :extensions [ss/depth-extension leg-extension]})
+;; => ({:state :home :depth 0 :legs [{:to :home :depth 0}]}
 ;;     {:state :park :depth 1
 ;;      :legs [{:to :home :depth 0}
-;;             {:from :home :label :walk :to :park :depth 1}]}]
+;;             {:from :home :label :walk :to :park :depth 1}]})
 \endtt
 
 The parent supplies the accumulated legs, the transition supplies the edge
@@ -699,13 +699,13 @@ transition. For example, track remaining fuel along a~route:
                      (fn [fuel transition]
                        (- fuel (:fuel-used transition)))))
 
-(vec (ss/dfs {:trailhead [[:ridge 3]]
-              :ridge []}
-             [:trailhead]
-             {:decode-edge (fn [[state fuel-used]]
-                             {:state state :fuel-used fuel-used})
-              :extensions [fuel-extension]}))
-;; => [{:state :trailhead :fuel-left 10} {:state :ridge :fuel-left 7}]
+(ss/dfs {:trailhead [[:ridge 3]]
+         :ridge []}
+        [:trailhead]
+        {:decode-edge (fn [[state fuel-used]]
+                        {:state state :fuel-used fuel-used})
+         :extensions [fuel-extension]})
+;; => ({:state :trailhead :fuel-left 10} {:state :ridge :fuel-left 7})
 \endtt
 
 By default, a~space function receives only the current state. Set
@@ -717,10 +717,10 @@ values. This is useful when legal moves depend on search context:
   (when (< depth 2)
     [(inc state)]))
 
-(vec (ss/dfs bounded-successors [0]
-                 {:project identity
-                  :extensions [ss/depth-extension]}))
-;; => [{:state 0 :depth 0} {:state 1 :depth 1} {:state 2 :depth 2}]
+(ss/dfs bounded-successors [0]
+            {:project identity
+             :extensions [ss/depth-extension]})
+;; => ({:state 0 :depth 0} {:state 1 :depth 1} {:state 2 :depth 2})
 \endtt
 
 The \code{:expand?} option can prune a~visit without removing it from the
@@ -728,11 +728,11 @@ result. It receives the full visit; when it returns false, the space is not
 called for that visit and no successors are generated:
 
 \begtt \hisyntax{clojure}
-(vec (ss/dfs {0 [1] 1 [2] 2 [3] 3 []}
-             [0]
-             {:extensions [ss/depth-extension]
-              :expand? #(< (:depth %) 2)}))
-;; => [{:state 0 :depth 0} {:state 1 :depth 1} {:state 2 :depth 2}]
+(ss/dfs {0 [1] 1 [2] 2 [3] 3 []}
+        [0]
+        {:extensions [ss/depth-extension]
+         :expand? #(< (:depth %) 2)})
+;; => ({:state 0 :depth 0} {:state 1 :depth 1} {:state 2 :depth 2})
 \endtt
 
 Post-order traversal offers additional callbacks for work that depends on
@@ -746,14 +746,14 @@ For example, count the tasks in each dependency subtree:
   {:exit (fn [_visit successors]
            {:size (inc (reduce + (map :size successors)))})})
 
-(vec (ss/postorder {:app [:lib :config]
-                    :lib [:base]
-                    :base []
-                    :config []}
-                   [:app]
-                   {:extensions [subtree-size]}))
-;; => [{:state :base :size 1} {:state :lib :size 2}
-;;     {:state :config :size 1} {:state :app :size 4}]
+(ss/postorder {:app [:lib :config]
+               :lib [:base]
+               :base []
+               :config []}
+              [:app]
+              {:extensions [subtree-size]})
+;; => ({:state :base :size 1} {:state :lib :size 2}
+;;     {:state :config :size 1} {:state :app :size 4})
 \endtt
 
 An extension's \code{:more?} callback can stop consuming successors based
@@ -773,13 +773,13 @@ fallback build:
                             :build)}
              {:ready? (= state :cached)}))})
 
-(vec (ss/postorder {:root [:cached :build]
-                    :cached []
-                    :build []}
-                   [:root]
-                   {:extensions [cache-or-build]}))
-;; => [{:state :cached, :ready? true}
-;;     {:state :root, :selected :cached}]
+(ss/postorder {:root [:cached :build]
+               :cached []
+               :build []}
+              [:root]
+              {:extensions [cache-or-build]})
+;; => ({:state :cached, :ready? true}
+;;     {:state :root, :selected :cached})
 \endtt
 
 A~\code{:next} callback can use completed siblings while extending the next
@@ -791,13 +791,13 @@ order:
   {:next (fn [parent _transition _visit]
            {:position (count (:previous parent))})})
 
-(vec (take 2
-           (ss/postorder {:app [:lib :config]
-                          :lib []
-                          :config []}
-                         [:app]
-                         {:extensions [sibling-position]})))
-;; => [{:state :lib :position 0} {:state :config :position 1}]
+(take 2
+      (ss/postorder {:app [:lib :config]
+                     :lib []
+                     :config []}
+                    [:app]
+                    {:extensions [sibling-position]}))
+;; => ({:state :lib :position 0} {:state :config :position 1})
 \endtt
 
 The \code{:next} callback receives the parent visit with its completed
@@ -813,14 +813,14 @@ without following them again:
            {:edges (mapv (juxt :state (comp :kind :via) :back-edge)
                          successors)})})
 
-(vec (ss/postorder {:a [[:b :depends-on]]
-                    :b [[:a :depends-on]]}
-                   [:a]
-                   {:decode-edge (fn [[state kind]]
-                                   {:state state :kind kind})
-                    :extensions [edge-report]}))
-;; => [{:state :b :edges [[:a :depends-on true]]}
-;;     {:state :a :edges [[:b :depends-on false]]}]
+(ss/postorder {:a [[:b :depends-on]]
+               :b [[:a :depends-on]]}
+              [:a]
+              {:decode-edge (fn [[state kind]]
+                              {:state state :kind kind})
+               :extensions [edge-report]})
+;; => ({:state :b :edges [[:a :depends-on true]]}
+;;     {:state :a :edges [[:b :depends-on false]]})
 \endtt
 
 Post-order traversal reuses the first visit for each key, including its

@@ -75,9 +75,9 @@ a~successor. First inspect the visits returned by DFS:
    :gallery [:exit]
    :exit []})
 
-(vec (ss/dfs building [:lobby]))
-;; => [{:state :lobby} {:state :stairs} {:state :landing}
-;;     {:state :exit} {:state :gallery}]
+(ss/dfs building [:lobby])
+;; => ({:state :lobby} {:state :stairs} {:state :landing}
+;;     {:state :exit} {:state :gallery})
 \endtt
 
 The second argument lists starting states: here there is just one,
@@ -247,12 +247,12 @@ links from visits at depth two, without excluding those pages from the result:
    :item [:reviews]
    :reviews []})
 
-(vec (ss/bfs website [:home]
-             {:extensions [ss/depth-extension]
-              :expand? #(< (:depth %) 2)}))
-;; => [{:state :home :depth 0} {:state :about :depth 1}
+(ss/bfs website [:home]
+        {:extensions [ss/depth-extension]
+         :expand? #(< (:depth %) 2)})
+;; => ({:state :home :depth 0} {:state :about :depth 1}
 ;;     {:state :shop :depth 1} {:state :team :depth 2}
-;;     {:state :item :depth 2}]
+;;     {:state :item :depth 2})
 \endtt
 
 Visits are still deduplicated by \code{:state}: BFS guarantees that the first
@@ -269,12 +269,12 @@ Alternatively, let the space function read the full visit with
   (when (< depth 2)
     (website state)))
 
-(vec (ss/bfs website-links [:home]
-             {:project identity
-              :extensions [ss/depth-extension]}))
-;; => [{:state :home :depth 0} {:state :about :depth 1}
+(ss/bfs website-links [:home]
+        {:project identity
+         :extensions [ss/depth-extension]})
+;; => ({:state :home :depth 0} {:state :about :depth 1}
 ;;     {:state :shop :depth 1} {:state :team :depth 2}
-;;     {:state :item :depth 2}]
+;;     {:state :item :depth 2})
 \endtt
 
 Both versions return the same visits. Prefer \code{:expand?} for this
@@ -307,12 +307,11 @@ each route prefix:
 (->> (ss/simple-paths city-map [:home]
                           {:extensions [ss/path-extension]})
      (filter #(= :museum (:state %)))
-     (map :path)
-     vec)
-;; => [[:home :park :market :museum]
+     (map :path))
+;; => ([:home :park :market :museum]
 ;;     [:home :park :museum]
 ;;     [:home :market :park :museum]
-;;     [:home :market :museum]]
+;;     [:home :market :museum])
 \endtt
 
 This enumeration is useful when all routes matter, rather than only the
@@ -425,12 +424,11 @@ the index in the state tells us when all decisions have been made:
 (->> (ss/dfs subset-decisions [[0 []]])
      (map :state)
      (filter #(= (count items) (first %)))
-     (map second)
-     vec)
-;; => [[] [:d] [:c] [:c :d]
+     (map second))
+;; => ([] [:d] [:c] [:c :d]
 ;;     [:b] [:b :d] [:b :c] [:b :c :d]
 ;;     [:a] [:a :d] [:a :c] [:a :c :d]
-;;     [:a :b] [:a :b :d] [:a :b :c] [:a :b :c :d]]
+;;     [:a :b] [:a :b :d] [:a :b :c] [:a :b :c :d])
 \endtt
 
 The search state includes both the partial answer and how many choices have
@@ -1688,11 +1686,10 @@ step's start time to their total duration:
                           :plate-food []}
                          [:lunch]
                          {:extensions [prep-schedule]})
-     (filter #(contains? % :starts-at))
-     vec)
-;; => [{:state :chop-vegetables :starts-at 0}
+     (filter #(contains? % :starts-at)))
+;; => ({:state :chop-vegetables :starts-at 0}
 ;;     {:state :mix-dressing :starts-at 4}
-;;     {:state :plate-food :starts-at 7}]
+;;     {:state :plate-food :starts-at 7})
 \endtt
 
 The callback uses results from earlier siblings to initialize each next
@@ -1722,13 +1719,13 @@ restore visit stop requesting successors once a~completed source succeeds:
              {:source (:state (some #(when (:available? %) %) successors))}
              {:available? (contains? available-copies state)}))})
 
-(vec (ss/postorder {:restore [:local-copy :network-copy]
-                    :local-copy []
-                    :network-copy []}
-                   [:restore]
-                   {:extensions [restore-extension]}))
-;; => [{:state :local-copy, :available? true}
-;;     {:state :restore, :source :local-copy}]
+(ss/postorder {:restore [:local-copy :network-copy]
+               :local-copy []
+               :network-copy []}
+              [:restore]
+              {:extensions [restore-extension]})
+;; => ({:state :local-copy, :available? true}
+;;     {:state :restore, :source :local-copy})
 \endtt
 
 The network-copy visit is absent because the local copy succeeded. If it
@@ -1754,14 +1751,14 @@ edge to a~task still being explored:
                            [state (:kind via) back-edge])
                          successors)})})
 
-(vec (ss/postorder {:api [[:database :requires]]
-                    :database [[:api :requires]]}
-                   [:api]
-                   {:decode-edge (fn [[state kind]]
-                                   {:state state :kind kind})
-                    :extensions [edge-report]}))
-;; => [{:state :database :edges [[:api :requires true]]}
-;;     {:state :api :edges [[:database :requires false]]}]
+(ss/postorder {:api [[:database :requires]]
+               :database [[:api :requires]]}
+              [:api]
+              {:decode-edge (fn [[state kind]]
+                              {:state state :kind kind})
+               :extensions [edge-report]})
+;; => ({:state :database :edges [[:api :requires true]]}
+;;     {:state :api :edges [[:database :requires false]]})
 \endtt
 
 The edge from \code{:database} back to \code{:api} closes the cycle. The
