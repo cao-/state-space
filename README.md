@@ -19,5 +19,5 @@ Add the library to your `deps.edn` dependencies:
 
 ```clojure
 {:deps
- {org.clojars.cao/state-space {:mvn/version "0.1.0"}}}
+ {org.clojars.cao/state-space {:mvn/version "0.2.0"}}}
 ```
