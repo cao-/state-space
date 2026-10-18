@@ -49,12 +49,17 @@ jobs:
             optex --interaction=nonstopmode --halt-on-error --output-directory=target/documentation state-space.tex
             optex --interaction=nonstopmode --halt-on-error --output-directory=target/documentation state-space.tex
             optex --interaction=nonstopmode --halt-on-error --output-directory=target/documentation state-space.tex
+            optex --interaction=nonstopmode --halt-on-error --output-directory=target/documentation worked-examples.tex
+            optex --interaction=nonstopmode --halt-on-error --output-directory=target/documentation worked-examples.tex
+            optex --interaction=nonstopmode --halt-on-error --output-directory=target/documentation worked-examples.tex
 
       - name: Upload documentation PDF
         uses: actions/upload-artifact@v4
         with:
           name: state-space-documentation
-          path: target/documentation/state-space.pdf
+          path: |
+            target/documentation/state-space.pdf
+            target/documentation/worked-examples.pdf
 
   publish:
     name: Publish to Clojars
@@ -104,6 +109,8 @@ jobs:
           fi
           STATE_SPACE_VERSION="$version" clojure -T:build jar
           clojure -X:deploy
-          gh release create "$GITHUB_REF_NAME" target/documentation/state-space.pdf \
+          gh release create "$GITHUB_REF_NAME" \
+            target/documentation/state-space.pdf \
+            target/documentation/worked-examples.pdf \
             --title "State-space $version" \
             --generate-notes
