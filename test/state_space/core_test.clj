@@ -352,6 +352,20 @@
       (is (not (contains? without-distance :distance)))
       (is (= 0 (:distance with-distance))))))
 
+(deftest best-first-selects-the-lowest-pending-not-globally-increasing-priority
+  (let [roads {:a [{:state :b :weight 2} {:state :c :weight 5}]
+               :b [{:state :a :weight 2} {:state :c :weight 1}]
+               :c [{:state :a :weight 5} {:state :b :weight 1}]}
+        joining-edge {:start (fn [_] {:joining-edge 0})
+                      :next (fn [_ transition _]
+                              {:joining-edge (:weight transition)})}]
+    (is (= [[:a 0] [:b 2] [:c 1]]
+           (mapv (juxt :state :joining-edge)
+                 (search/best-first roads [:a]
+                                    {:decode-edge identity
+                                     :extensions [joining-edge]
+                                     :priority :joining-edge}))))))
+
 (deftest best-first-breaks-equal-priorities-in-enqueue-order
   (is (= [:start :first :second :third]
          (mapv :state

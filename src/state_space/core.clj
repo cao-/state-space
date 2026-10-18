@@ -444,7 +444,7 @@
    (successors-of space opts visit)))
 
 (defn best-first
-  "Lazily yields visits in nondecreasing priority, best-first.
+  "Lazily selects the lowest-priority pending visit, best-first.
 
   By default the priority is :distance, giving Dijkstra's shortest-path
   order. This default automatically enables distance-extension. Each
@@ -456,9 +456,11 @@
   or an extension-provided edge weight for Prim's algorithm. Each visit key is
   settled at most once, at the best priority offered for that key before
   settlement, so the priority must suit the problem (e.g. a consistent
-  heuristic for A*); that is the caller's responsibility. A custom priority
-  does not enable distance-extension; include it explicitly when the priority
-  or results need cumulative distance. Equal priorities are emitted FIFO in
+  heuristic for A*); that is the caller's responsibility. Newly discovered
+  candidates may have lower priorities than previously emitted visits, so
+  custom priorities do not generally produce globally sorted results.
+  A custom priority does not enable distance-extension; include it explicitly
+  when the priority or results need cumulative distance. Equal priorities are emitted FIFO in
   enqueue order; this order depends on the iteration order of starts and
   successors. On infinite spaces, finite non-negative weights alone do not
   guarantee that a positive-cost result will eventually be emitted: an
