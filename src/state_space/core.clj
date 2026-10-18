@@ -238,7 +238,12 @@
   bottom-up computation over the successors' own results. Each successor
   appears as the visit that first reached that node: finished, with its :exit
   values, or, for a back edge to a node still in progress, with top-down
-  values only. Successors are reported in the order the space produced them,
+  values only. Equal visit keys must identify interchangeable computations:
+  include relevant route context in the key when expansion, :more? pruning,
+  or computed results depend on it. A cached result from one budget or
+  pruning window is not automatically valid under another; later arrivals
+  do not recompute it. These are caller expectations, not runtime checks.
+  Successors are reported in the order the space produced them,
   and each carries two keys describing the edge it was reached by in this
   particular parent: :via, the decoded transition (so edge weights and labels
   are available even when the node was first reached through another edge),

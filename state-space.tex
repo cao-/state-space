@@ -837,7 +837,11 @@ unfinished visit, so an exit callback must not assume every successor has
 its computed fields. Use \ref[propagation]{propagation} instead when
 information must circulate until it stabilizes. If a~result depends on its
 route, choose a~visit key that distinguishes the relevant context rather
-than reusing another route's result.
+than reusing another route's result. This includes context used by
+\code{:expand?} or \code{:more?}: a~result computed under one budget or
+pruning window is not automatically valid under another. Equal keys must
+identify interchangeable computations; a~later arrival does not recompute
+the cached result.
 The key must remain stable from entry through completion: \code{:exit}
 callbacks may add computed fields, but must not change the visit's identity.
 The reserved \code{:previous}, \code{:via}, and \code{:back-edge} fields are

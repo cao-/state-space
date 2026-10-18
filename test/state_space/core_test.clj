@@ -673,6 +673,31 @@
     (is (= [1 11 11 221] (mapv ::original-size visits)))
     (is (= [10 110 110 2210] (mapv ::size visits)))))
 
+(deftest postorder-context-key-keeps-depth-pruned-results-separate
+  (doseq [pruning [:expand? :more?]]
+    (let [subtree-size
+          (cond-> {:exit (fn [_ children]
+                           {::size (inc (reduce + 0 (map ::size children)))})}
+            (= pruning :more?)
+            (assoc :more? (fn [visit _] (< (:depth visit) 2))))
+          options
+          (cond-> {:visit-key (juxt :state :depth)
+                   :extensions [search/depth-extension subtree-size]}
+            (= pruning :expand?)
+            (assoc :expand? #(< (:depth %) 2)))
+          visits (vec (search/postorder
+                       {:root [:detour :shared]
+                        :detour [:shared]
+                        :shared [:leaf]}
+                       [:root]
+                       options))]
+      (is (= [[2 1] [1 2]]
+             (mapv (juxt :depth ::size)
+                   (filter #(= :shared (:state %)) visits))))
+      (is (= [:leaf]
+             (mapv :state (filter #(= :leaf (:state %)) visits))))
+      (is (= 5 (::size (last visits)))))))
+
 (deftest projection-can-give-a-space-the-whole-visit
   (let [successors (fn [{:keys [state depth]}]
                      (if (< depth 2) [(inc state)] []))]
