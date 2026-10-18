@@ -3,15 +3,18 @@
 
 (defn- initialize-visit [extensions visit]
   (reduce (fn [visit {:keys [start]}]
-            (if start (merge visit (start visit)) visit))
+            (if start (reduce-kv assoc visit (start visit)) visit))
           visit
           extensions))
 
 (defn- extend-visit [extensions parent transition visit]
   (reduce (fn [visit {:keys [next]}]
-            (if next (merge visit (next parent transition visit)) visit))
+            (if next (reduce-kv assoc visit (next parent transition visit)) visit))
           visit
           extensions))
+
+(defn- successor-visit [extensions parent transition]
+  (extend-visit extensions parent transition {:state (:state transition)}))
 
 (defn- finish-visit
   "Bottom-up counterpart of extend-visit: extensions with an :exit callback
@@ -19,7 +22,7 @@
   [extensions visit children]
   (reduce (fn [visit extension]
             (if-let [exit (:exit extension)]
-              (merge visit (exit visit children))
+              (reduce-kv assoc visit (exit visit children))
               visit))
           visit
           extensions))
@@ -78,7 +81,16 @@
 (defn- default-decode-edge [successor]
   {:state successor})
 
-(defn- map-lazy [f items]
+(defn- search-options [options]
+  {:project (get options :project :state)
+   :decode-edge (get options :decode-edge default-decode-edge)
+   :extensions (vec (get options :extensions []))
+   :visit-key (get options :visit-key :state)
+   :expand? (get options :expand? (constantly true))})
+
+(defn- map-lazy
+  "Unlike chunked map, invokes f only for the requested item."
+  [f items]
   (lazy-seq
    (when-let [items (seq items)]
      (cons (f (first items))
@@ -90,7 +102,7 @@
 (defn- explore
   "Shares lazy traversal mechanics; frontier operations define visit order.
   An optional refine function maps (parent candidate) to a candidate or nil."
-  [space {:keys [extensions visit-key] :as opts} refine
+  [space {:keys [decode-edge extensions visit-key] :as opts} refine
    visited pending pop-item push-chunk]
   (lazy-seq
    (loop [visited visited
@@ -102,22 +114,21 @@
            (recur visited frontier)
            (let [next-visited (when visit-key (conj visited key))]
              (cons visit
-                   (lazy-seq
-                    (let [children
+                   (let [children
+                         (lazy-seq
                           (keep (fn [successor]
-                                  (let [transition ((:decode-edge opts) successor)
-                                        candidate (extend-visit
-                                                   extensions visit transition
-                                                   {:state (:state transition)})]
+                                  (let [transition (decode-edge successor)
+                                        candidate (successor-visit
+                                                   extensions visit transition)]
                                     (if refine
                                       (refine visit candidate)
                                       candidate)))
-                                (successors-of space opts visit))]
-                      (explore space opts refine
-                               next-visited
-                               (push-chunk frontier children)
-                               pop-item
-                               push-chunk)))))))))))
+                                (successors-of space opts visit)))]
+                     (explore space opts refine
+                              next-visited
+                              (push-chunk frontier children)
+                              pop-item
+                              push-chunk))))))))))
 
 (defn- depth-first [space starts options refine]
   (let [{:keys [visit-key] :as opts} options]
@@ -146,7 +157,7 @@
   maps. Callbacks must preserve :state. Custom context fields merge in
   extension order, with later fields replacing earlier ones; use namespaced
   keys for independently reusable extensions to avoid accidental collisions.
-  Postorder reserves :previous, :via, and :back-edge for its callback views.
+  Postorder reserves :processed-successors, :via, and :back-edge for its callback views.
   :start and :next prepare candidates before duplicate or path-repeat
   rejection, so they may run for visits that are never emitted. Prefer pure
   callbacks; use result consumption for actions on emitted visits.
@@ -156,11 +167,7 @@
    (dfs space starts {}))
   ([space starts options]
    (depth-first space starts
-                {:project (get options :project :state)
-                 :decode-edge (get options :decode-edge default-decode-edge)
-                 :extensions (vec (get options :extensions []))
-                 :visit-key (get options :visit-key :state)
-                 :expand? (get options :expand? (constantly true))}
+                (search-options options)
                 nil)))
 
 (defn- reject-repeated-keys
@@ -189,13 +196,8 @@
   ([space starts]
    (simple-paths space starts {}))
   ([space starts options]
-   (let [visit-key (get options :visit-key :state)
-         opts {:project (get options :project :state)
-               :decode-edge (get options :decode-edge default-decode-edge)
-               :extensions (vec (get options :extensions []))
-               :visit-key nil
-               :expand? (get options :expand? (constantly true))}]
-     (depth-first space starts opts
+   (let [{:keys [visit-key] :as opts} (search-options options)]
+     (depth-first space starts (assoc opts :visit-key nil)
                   (when visit-key
                     (reject-repeated-keys visit-key))))))
 
@@ -204,17 +206,13 @@
 
   Space and options are the same as in dfs. In a static space, each equal
   state is reported once at its minimum edge-count depth. Add depth-extension
-  to include edge-count depth. An infinite current level can produce visits
+  to include edge-count depth. Successor generation is deferred until its
+  frontier chunk is needed. An infinite current level can produce visits
   indefinitely but prevents deeper levels from being reached."
   ([space starts]
    (bfs space starts {}))
   ([space starts options]
-   (let [{:keys [visit-key] :as opts}
-         {:project (get options :project :state)
-          :decode-edge (get options :decode-edge default-decode-edge)
-          :extensions (vec (get options :extensions []))
-          :visit-key (get options :visit-key :state)
-          :expand? (get options :expand? (constantly true))}]
+   (let [{:keys [visit-key] :as opts} (search-options options)]
      (explore space opts nil
               (when visit-key #{})
               (frontier/queue-push (frontier/queue) (start-visits opts starts))
@@ -239,7 +237,7 @@
   appears as the visit that first reached that node: finished, with its :exit
   values, or, for a back edge to a node still in progress, with top-down
   values only. Equal visit keys must identify interchangeable computations:
-  include relevant route context in the key when expansion, :more? pruning,
+  include relevant route context in the key when expansion, :continue? pruning,
   or computed results depend on it. A cached result from one budget or
   pruning window is not automatically valid under another; later arrivals
   do not recompute it. These are caller expectations, not runtime checks.
@@ -248,16 +246,18 @@
   particular parent: :via, the decoded transition (so edge weights and labels
   are available even when the node was first reached through another edge),
   and :back-edge, true when the successor was still in progress. Extensions
-  must not define :previous, :via, or :back-edge as their own context fields;
+  must not define :processed-successors, :via, or :back-edge as their own context fields;
   these keys are reserved for postorder's callback views, not guaranteed
   fields on emitted visits. These expectations are not checked at runtime.
 
-  Successors are consumed and decoded one at a time. Callbacks may also see
-  siblings finished so far: :next receives the parent with a :previous key,
-  the vector of its already finished successors (in the same form as in
-  :exit), and an extension's :more? callback, a function of the visit and that
-  vector, is checked before consuming and decoding the next successor,
-  including the first. If any callback returns false, no next successor is
+  Successors are consumed and decoded one at a time. The :next callback
+  receives the parent with :processed-successors, a vector of successor
+  views handled so far, including back edges (in the same form as in :exit).
+  An extension's :continue? callback, a function of the visit and that vector,
+  is checked before consuming and decoding the next successor,
+  including the first. Rejecting the first successor also avoids calling
+  :expand?, :project, and the space for that visit.
+  If any callback returns false, no next successor is
   decoded or visited and the visit is finished with what it has. A chunked
   successor collection may realize more raw values when one is consumed. The
   check also happens once when a visit has no successors, so callbacks should
@@ -267,77 +267,71 @@
   ([space starts]
    (postorder space starts {}))
   ([space starts options]
-   (let [{:keys [extensions visit-key] :as opts}
-         {:project (get options :project :state)
-          :decode-edge (get options :decode-edge default-decode-edge)
-          :extensions (vec (get options :extensions []))
-          :visit-key (get options :visit-key :state)
-          :expand? (get options :expand? (constantly true))}
-         more? (keep :more? extensions)]
-     (letfn [(finish [known done pending visit previous]
-               (let [finished (finish-visit extensions visit previous)
+   (let [{:keys [decode-edge extensions visit-key] :as opts} (search-options options)
+         continue? (keep :continue? extensions)]
+     (letfn [(finish [known done pending visit processed]
+               (let [finished (finish-visit extensions visit processed)
                      key (visit-key visit)]
                  (cons finished
-                       (lazy-seq
-                        (walk (assoc known key finished)
-                              (conj done key)
-                              pending)))))
-             (continue [known done pending visit previous remaining awaiting]
-               (let [previous (if awaiting
+                       (walk (assoc known key finished)
+                             (conj done key)
+                             pending))))
+             (continue [known done pending visit processed remaining awaiting]
+               (let [processed (if awaiting
                                 (let [[key transition] awaiting]
-                                  (conj previous
+                                  (conj processed
                                         (assoc (known key)
                                                :via transition
                                                :back-edge (not (contains? done key)))))
-                                previous)]
-                 (if-let [remaining (when (every? #(% visit previous) more?)
+                                processed)]
+                 (if-let [remaining (when (every? #(% visit processed) continue?)
                                       (seq remaining))]
-                   (let [transition (first remaining)
-                         child (extend-visit extensions
-                                             (assoc visit :previous previous)
-                                             transition
-                                             {:state (:state transition)})
+                   (let [transition (decode-edge (first remaining))
+                         child (successor-visit extensions
+                                                (assoc visit :processed-successors processed)
+                                                transition)
                          resume-parent {:kind :continue
                                         :visit visit
-                                        :previous previous
+                                        :processed-successors processed
                                         :remaining (rest remaining)
                                         :awaiting [(visit-key child) transition]}]
                      (walk known done
-                           (-> pending
-                               (frontier/stack-push [resume-parent])
-                               (frontier/stack-push [{:kind :enter :visit child}]))))
-                   (finish known done pending visit previous))))
+                           (cons {:kind :enter :visit child}
+                                 (cons resume-parent pending))))
+                   (finish known done pending visit processed))))
              (enter [known done pending visit]
                (let [key (visit-key visit)]
                  (if (contains? known key)
                    (walk known done pending)
                    (let [resume-visit {:kind :continue
-                                       :visit visit
-                                       :previous []
-                                       :remaining
-                                       (map-lazy (:decode-edge opts)
-                                                 (successors-of space opts visit))}]
+                                      :visit visit
+                                      :processed-successors []
+                                      :remaining
+                                      (lazy-seq
+                                       (successors-of space opts visit))}]
                      (walk (assoc known key visit)
                            done
-                           (frontier/stack-push pending [resume-visit]))))))
+                           (cons resume-visit pending))))))
              (walk [known done pending]
                (lazy-seq
-                (when-let [{:keys [item frontier]} (frontier/stack-pop pending)]
-                  (case (:kind item)
-                    :enter
-                    (enter known done frontier (:visit item))
+                (when-let [pending (seq pending)]
+                  (let [item (first pending)
+                        pending (rest pending)]
+                    (case (:kind item)
+                      :enter
+                      (enter known done pending (:visit item))
 
-                    :continue
-                    (continue known done frontier
-                              (:visit item)
-                              (:previous item)
-                              (:remaining item)
-                              (:awaiting item))))))]
+                      :continue
+                      (continue known done pending
+                                (:visit item)
+                                (:processed-successors item)
+                                (:remaining item)
+                                (:awaiting item)))))))]
        (walk {} #{}
-             (frontier/stack-push
-              (frontier/stack)
-              (map-lazy (fn [visit] {:kind :enter :visit visit})
-                        (start-visits opts starts))))))))
+             (map-lazy (fn [state]
+                         {:kind :enter
+                          :visit (initialize-visit extensions {:state state})})
+                       starts))))))
 
 (defn propagate
   "Lazily propagates and joins values through a state space.
@@ -361,6 +355,8 @@
   A destination may occur more than once, with its accumulated value after
   each update; contributions leaving a known value unchanged add no entry.
   The :values map contains the values after all transitions for that record.
+  Initial worklist construction is deferred until a processing record is
+  requested.
   States whose values change are scheduled for processing
   again; a pending state is queued only once. The result is finite exactly
   when the worklist becomes empty. Exhaust it or take a prefix to observe
@@ -375,9 +371,7 @@
   [space initial-values {:keys [bottom join] :as options}]
   (let [opts {:project (get options :project :state)
               :decode-edge (get options :decode-edge default-decode-edge)
-              :expand? (get options :expand? (constantly true))}
-        initial-queue (into clojure.lang.PersistentQueue/EMPTY
-                            (keys initial-values))]
+              :expand? (get options :expand? (constantly true))}]
     (letfn [(run [values queue pending]
               (lazy-seq
                (when (seq queue)
@@ -387,21 +381,17 @@
                        visit {:state state :value (get values state)}
                        result
                        (reduce
-                        (fn [{:keys [values queue pending changes]}
+                        (fn [{:keys [values queue pending changes] :as result}
                              successor]
                           (let [transition ((:decode-edge opts) successor)
                                 state (:state transition)
                                 contribution (if (contains? transition :value)
                                                (:value transition)
                                                (:value visit))
-                                known? (contains? values state)
-                                previous (if known? (get values state) bottom)
+                                previous (get values state bottom)
                                 value (join previous contribution)]
-                            (if (and known? (= previous value))
-                              {:values values
-                               :queue queue
-                               :pending pending
-                               :changes changes}
+                            (if (and (= previous value) (contains? values state))
+                              result
                               {:values (assoc values state value)
                                :queue (if (contains? pending state)
                                         queue
@@ -413,9 +403,7 @@
                          :queue queue
                          :pending pending
                          :changes []}
-                         (successors-of space
-                                        opts
-                                        visit))]
+                        (successors-of space opts visit))]
                    (cons {:values (:values result)
                           :processed state
                           :changes (:changes result)}
@@ -424,32 +412,35 @@
                               (:pending result)))))))]
       (cons {:values initial-values
              :changes []}
-            (run initial-values
-                 initial-queue
-                 (set initial-queue))))))
+            (lazy-seq
+             (let [initial-queue (into clojure.lang.PersistentQueue/EMPTY
+                                       (keys initial-values))]
+               (run initial-values initial-queue (set initial-queue))))))))
+
 (defn- enqueue
   "Queues a visit unless its key is settled or already has a priority at
   least as good."
-  [{:keys [visit-key priority]} visit settled [best queue order]]
+  [{:keys [visit-key priority]} visit settled [queued queue order :as state]]
   (let [key (visit-key visit)
-        p (priority visit)]
+        p (priority visit)
+        previous (get queued key)]
     (if (or (contains? settled key)
-            (and (contains? best key)
-                 (not (neg? (compare p (get best key))))))
-      [best queue order]
-      [(assoc best key p)
-       (assoc queue [p order] visit)
-       (inc order)])))
+            (and previous
+                 (not (neg? (compare p (first previous))))))
+      state
+      (let [queue-key [p order]]
+        [(assoc queued key queue-key)
+         (assoc (if previous (dissoc queue previous) queue) queue-key visit)
+         (inc order)]))))
 
 (defn- relax
   "Queues improved candidates for the successors of a settled visit."
-  [space {:keys [extensions] :as opts} visit settled state]
+  [space {:keys [decode-edge extensions] :as opts} visit settled state]
   (reduce
    (fn [state successor]
-     (let [transition ((:decode-edge opts) successor)]
+     (let [transition (decode-edge successor)]
        (enqueue opts
-                (extend-visit extensions visit transition
-                              {:state (:state transition)})
+                (successor-visit extensions visit transition)
                 settled
                 state)))
    state
@@ -493,34 +484,26 @@
                    (with-required options distance-extension)
                    options)
          {:keys [extensions visit-key] :as opts}
-         {:project (get options :project :state)
-          :decode-edge (get options :decode-edge default-decode-edge)
-          :extensions (vec (get options :extensions []))
-          :visit-key (get options :visit-key :state)
-          :expand? (get options :expand? (constantly true))
-          :priority priority}]
-     (letfn [(search [best settled queue order]
+         (assoc (search-options options) :priority priority)]
+     (letfn [(search [queued settled queue order]
                (lazy-seq
                 (when (seq queue)
                   (let [[queue-key visit] (first queue)
-                        [p _] queue-key
                         queue (dissoc queue queue-key)
-                        key (visit-key visit)]
-                    (if (or (contains? settled key)
-                            (not= p (get best key)))
-                      (search best settled queue order)
-                      (let [settled (conj settled key)]
-                        (cons visit
-                              (lazy-seq
-                               (let [[best queue order]
-                                     (relax space opts visit settled
-                                            [best queue order])]
-                                 (search best settled queue order))))))))))]
+                        key (visit-key visit)
+                        queued (dissoc queued key)
+                        settled (conj settled key)]
+                    (cons visit
+                          (lazy-seq
+                           (let [[queued queue order]
+                                 (relax space opts visit settled
+                                        [queued queue order])]
+                             (search queued settled queue order))))))))]
        (lazy-seq
-        (let [[best queue order]
+        (let [[queued queue order]
               (reduce (fn [state start]
                         (enqueue opts (initialize-visit extensions {:state start})
                                  #{} state))
                       [{} (sorted-map) 0]
                       starts)]
-          (search best #{} queue order)))))))
+          (search queued #{} queue order)))))))

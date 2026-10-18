@@ -1624,7 +1624,7 @@ At what minute does each step begin?
 \smallskip
 \noindent{\bf Solution.} Treat the lunch as depending on its preparation
 steps in work order. A~post-order \code{:next} callback sees the completed
-earlier steps in the parent's \code{:previous} field, so it can set the next
+earlier steps in the parent's \code{:processed-successors} field, so it can set the next
 step's start time to their total duration:
 
 \begtt \hisyntax{clojure}
@@ -1637,7 +1637,7 @@ step's start time to their total duration:
   {:next (fn [parent _transition _visit]
            {:starts-at (reduce + 0
                                (map #(prep-minutes (:state %))
-                                    (:previous parent)))})})
+                                    (:processed-successors parent)))})})
 
 (->> (ss/postorder {:lunch [:chop-vegetables
                                   :mix-dressing
@@ -1665,16 +1665,16 @@ copy is available?
 
 \smallskip
 \noindent{\bf Solution.} Give the preferred source first in the successor
-order. Each source reports whether it is available; \code{:more?} lets the
+order. Each source reports whether it is available; \code{:continue?} lets the
 restore visit stop requesting successors once a~completed source succeeds:
 
 \begtt \hisyntax{clojure}
 (def available-copies #{:local-copy})
 
 (def restore-extension
-  {:more? (fn [{:keys [state]} previous]
+  {:continue? (fn [{:keys [state]} processed]
             (or (not= state :restore)
-                (not-any? :available? previous)))
+                (not-any? :available? processed)))
    :exit (fn [{:keys [state]} successors]
            (if (= state :restore)
              {:source (:state (some #(when (:available? %) %) successors))}

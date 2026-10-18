@@ -44,3 +44,44 @@
       (let [second-pop (pop-item (:frontier first-pop))]
         (is (= 2 (:item second-pop)))
         (is (= [1 2] @realized))))))
+
+(deftest frontiers-match-a-reference-under-interleaved-operations
+  (doseq [[push pop-item empty-frontier prepend?]
+          [[frontier/stack-push frontier/stack-pop (frontier/stack) true]
+           [frontier/queue-push frontier/queue-pop (frontier/queue) false]]]
+    (let [random (java.util.Random. 1729)]
+      (loop [pending empty-frontier
+             expected []
+             step 0]
+        (if (= step 1000)
+          (is (= expected (drain pop-item pending)))
+          (if (< (.nextInt random 3) 2)
+            (let [chunk (vec (take (.nextInt random 5) [nil false step :item]))
+                  expected (if prepend?
+                             (into chunk expected)
+                             (into expected chunk))]
+              (recur (push pending chunk) expected (inc step)))
+            (let [result (pop-item pending)]
+              (is (= (boolean (seq expected)) (some? result)))
+              (when (seq expected)
+                (is (= (first expected) (:item result))))
+              (recur (if result (:frontier result) pending)
+                     (vec (rest expected))
+                     (inc step)))))))))
+
+(deftest frontiers-skip-many-empty-chunks
+  (doseq [[push pop-item empty-frontier]
+          [[frontier/stack-push frontier/stack-pop (frontier/stack)]
+           [frontier/queue-push frontier/queue-pop (frontier/queue)]]]
+    (let [pending (reduce push empty-frontier (repeat 20000 []))]
+      (is (nil? (pop-item pending)))
+      (is (= [nil false] (drain pop-item (push pending [nil false])))))))
+
+(deftest pushing-does-not-realize-a-chunk
+  (doseq [[push empty-frontier]
+          [[frontier/stack-push (frontier/stack)]
+           [frontier/queue-push (frontier/queue)]]]
+    (let [realized (atom [])
+          chunk (observed-seq [1 2] realized)]
+      (push empty-frontier chunk)
+      (is (empty? @realized)))))

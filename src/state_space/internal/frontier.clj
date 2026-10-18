@@ -8,17 +8,16 @@
 
 (defn stack-push
   "Pushes a lazy chunk onto a stack, ahead of its remaining items."
-  [frontier chunk]
-  (-> frontier
-      (update :chunks conj (:current frontier))
-      (assoc :current chunk)))
+  [{:keys [current chunks]} chunk]
+  {:current chunk
+   :chunks (conj chunks current)})
 
 (defn- pop-item [frontier next-chunk remaining-chunks]
   (loop [current (:current frontier)
          chunks (:chunks frontier)]
     (if-let [remaining (seq current)]
       {:item (first remaining)
-       :frontier (assoc frontier :current (rest remaining) :chunks chunks)}
+       :frontier {:current (rest remaining) :chunks chunks}}
       (when (seq chunks)
         (recur (next-chunk chunks) (remaining-chunks chunks))))))
 

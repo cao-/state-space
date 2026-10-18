@@ -3,6 +3,348 @@
             [clojure.test :refer [deftest is testing]]
             [state-space.core :as search]))
 
+(deftest postorder-processed-successors-include-back-edges
+  (let [observed (atom [])
+        extension
+        {:continue? (fn [{:keys [state]} processed]
+                      (when (= state :root)
+                        (swap! observed conj
+                               (mapv (juxt :state :back-edge) processed)))
+                      true)
+         :next (fn [parent _transition _visit]
+                 {:earlier (mapv (juxt :state :back-edge)
+                                 (:processed-successors parent))})}
+        visits (vec (search/postorder {:root [:root :leaf]}
+                                       [:root]
+                                       {:extensions [extension]}))]
+    (is (= [:leaf :root] (mapv :state visits)))
+    (is (= [[:root true]] (:earlier (first visits))))
+    (is (= [[] [[:root true]] [[:root true] [:leaf false]]]
+           @observed))))
+
+(deftest searches-defer-user-callbacks-until-consumption
+  (doseq [algorithm [search/dfs search/bfs search/simple-paths
+                     search/postorder search/best-first]]
+    (let [calls (atom [])
+          record (fn [kind value] (swap! calls conj kind) value)
+          visits (algorithm
+                  (fn [_] (record :space [])) [:root]
+                  {:project (fn [visit] (record :project (:state visit)))
+                   :expand? (fn [_] (record :expand true))
+                   :visit-key (fn [visit] (record :key (:state visit)))
+                   :extensions [{:start (fn [_] (record :start {}))
+                                 :exit (fn [_ _] (record :exit {}))}]})]
+      (is (empty? @calls))
+      (is (= :root (:state (first visits))))
+      (is (seq @calls)))))
+
+(deftest preorder-searches-do-not-expand-the-last-requested-visit
+  (doseq [algorithm [search/dfs search/bfs search/simple-paths search/best-first]]
+    (let [expanded (atom [])
+          visits (algorithm
+                  (fn [state]
+                    (swap! expanded conj state)
+                    [(inc state)])
+                  [0])]
+      (is (= (range 20) (mapv :state (take 20 visits))))
+      (is (= (range 19) @expanded)))))
+
+(deftest searches-without-global-priority-consume-infinite-starts-incrementally
+  (doseq [algorithm [search/dfs search/bfs search/simple-paths search/postorder]]
+    (let [initialized (atom [])
+          visits (algorithm
+                  {} (range)
+                  {:extensions [{:start (fn [{:keys [state]}]
+                                          (swap! initialized conj state)
+                                          {})}]})]
+      (is (= (range 20) (mapv :state (take 20 visits))))
+      (is (= (range 20) @initialized)))))
+
+(deftest depth-first-searches-consume-infinite-successors-incrementally
+  (doseq [algorithm [search/dfs search/simple-paths]]
+    (let [decoded (atom [])
+          visits (algorithm
+                  (fn [state] (when (= :root state) (iterate inc 0)))
+                  [:root]
+                  {:decode-edge (fn [state]
+                                  (swap! decoded conj state)
+                                  {:state state})})]
+      (is (= (into [:root] (range 19))
+             (mapv :state (take 20 visits))))
+      (is (= (range 19) @decoded)))))
+
+(deftest bfs-consumes-an-infinite-level-without-expanding-it
+  (let [expanded (atom [])
+        visits (search/bfs
+                (fn [state]
+                  (swap! expanded conj state)
+                  (if (= :root state) (range) [:deeper]))
+                [:root])]
+    (is (= (into [:root] (range 19))
+           (mapv :state (take 20 visits))))
+    (is (= [:root] @expanded))))
+
+(deftest bfs-defers-expansion-while-earlier-starts-remain
+  (let [expanded (atom [])
+        visits (search/bfs
+                (fn [state] (swap! expanded conj state) [:child])
+                (range))]
+    (is (= (range 20) (mapv :state (take 20 visits))))
+    (is (empty? @expanded))))
+
+(deftest postorder-does-not-request-successors-when-pruned-immediately
+  (let [calls (atom [])
+        visits (search/postorder
+                (fn [_] (swap! calls conj :space) (range))
+                [:root]
+                {:expand? (fn [_] (swap! calls conj :expand) true)
+                 :project (fn [visit]
+                            (swap! calls conj :project)
+                            (:state visit))
+                 :extensions [{:continue? (fn [_ _] false)}]})]
+    (is (= [{:state :root}] (vec visits)))
+    (is (empty? @calls))))
+
+(deftest best-first-inspects-the-whole-local-frontier-before-selecting
+  (let [decoded (atom [])
+        expanded (atom [])
+        visits (search/best-first
+                (fn [state]
+                  (swap! expanded conj state)
+                  (when (= :root state)
+                    [{:state :expensive :weight 9}
+                     {:state :cheap :weight 1}]))
+                [:root]
+                {:decode-edge (fn [transition]
+                                (swap! decoded conj (:state transition))
+                                transition)})]
+    (is (= :root (:state (first visits))))
+    (is (empty? @expanded))
+    (is (empty? @decoded))
+    (is (= :cheap (:state (second visits))))
+    (is (= [:root] @expanded))
+    (is (= [:expensive :cheap] @decoded))))
+
+(deftest propagation-consumes-one-whole-expansion-per-progress-record
+  (let [expanded (atom [])
+        decoded (atom [])
+        visits (search/propagate
+                (fn [state]
+                  (swap! expanded conj state)
+                  (when (= :root state) [:a :b]))
+                {:root 1}
+                {:bottom 0 :join max
+                 :decode-edge (fn [state]
+                                (swap! decoded conj state)
+                                {:state state})})]
+    (is (= {:values {:root 1} :changes []} (first visits)))
+    (is (empty? @expanded))
+    (is (empty? @decoded))
+    (is (= {:values {:root 1 :a 1 :b 1}
+            :processed :root
+            :changes [{:state :a :value 1} {:state :b :value 1}]}
+           (second visits)))
+    (is (= [:root] @expanded))
+    (is (= [:a :b] @decoded))))
+
+(deftest propagation-defers-initial-worklist-construction
+  (let [initial-values {:root 1}
+        enumerated (atom 0)
+        original-keys keys]
+    (with-redefs [clojure.core/keys
+                  (fn [m]
+                    (when (identical? initial-values m)
+                      (swap! enumerated inc))
+                    (original-keys m))]
+      (let [visits (search/propagate {} initial-values {:bottom 0 :join max})]
+        (is (zero? @enumerated))
+        (is (= {:values initial-values :changes []} (first visits)))
+        (is (zero? @enumerated))
+        (is (= :root (:processed (second visits))))
+        (is (= 1 @enumerated))
+        (is (= 2 (count visits)))
+        (is (= 1 @enumerated))))))
+
+(deftest propagation-distinguishes-missing-values-from-nil-and-false
+  (let [initial-values (array-map :root :seed :known-nil nil :known-false false)
+        visits (search/propagate
+                {:root [{:state :known-nil :value nil}
+                        {:state :known-false :value false}
+                        {:state :new :value nil}]}
+                initial-values
+                {:decode-edge identity
+                 :bottom nil
+                 :join (fn [_ contribution] contribution)})]
+    (is (= {:values (assoc initial-values :new nil)
+            :processed :root
+            :changes [{:state :new :value nil}]}
+           (second visits)))
+    (is (= [:root :known-nil :known-false :new]
+           (mapv :processed (rest visits))))))
+
+(deftest searches-accept-nil-options-and-nil-extensions
+  (doseq [algorithm [search/dfs search/bfs search/simple-paths
+                     search/postorder search/best-first]]
+    (let [graph {:a [:b] :b []}
+          expected (vec (algorithm graph [:a]))]
+      (is (= expected (vec (algorithm graph [:a] nil))))
+      (is (= expected (vec (algorithm graph [:a] {:extensions nil})))))))
+
+(deftest extension-callbacks-merge-different-map-representations
+  (doseq [context [(array-map :score 3)
+                   (hash-map :score 3 nil false false nil)
+                   (sorted-map :score 3)
+                   (into {} (map (fn [n] [n n]) (range 20)))
+                   {}]]
+    (let [extension {:start (constantly context)
+                     :next (fn [_ _ _] context)
+                     :exit (fn [_ _] context)}
+          options {:extensions [extension]}]
+      (is (= [(merge {:state :root} context)
+              (merge {:state :leaf} context)]
+             (vec (search/dfs {:root [:leaf]} [:root] options))))
+      (is (= [(merge {:state :leaf} context)
+              (merge {:state :root} context)]
+             (vec (search/postorder {:root [:leaf]} [:root] options)))))))
+
+(deftest searches-preserve-nil-and-false-state-identities
+  (doseq [algorithm [search/dfs search/bfs search/simple-paths
+                     search/postorder search/best-first]]
+    (is (= #{nil false :root}
+           (set (map :state (algorithm {:root [nil false]} [:root])))))))
+
+(deftest postorder-is-stack-safe-on-a-deep-chain
+  (let [depth 15000
+        visits (search/postorder (fn [n] (when (< n depth) [(inc n)])) [0])]
+    (is (= (range depth -1 -1) (map :state visits)))))
+
+(deftest postorder-consumes-infinite-starts-one-at-a-time
+  (let [initialized (atom [])
+        visits (search/postorder
+                {} (range)
+                {:extensions [{:start (fn [{:keys [state]}]
+                                        (swap! initialized conj state)
+                                        {})}]})]
+    (is (= (range 20) (mapv :state (take 20 visits))))
+    (is (= (range 20) @initialized))))
+
+(deftest postorder-consumes-infinite-successors-one-at-a-time
+  (let [decoded (atom [])
+        expanded (atom [])
+        visits (search/postorder
+                (fn [state]
+                  (swap! expanded conj state)
+                  (when (= :root state) (range)))
+                [:root]
+                {:decode-edge (fn [state]
+                                (swap! decoded conj state)
+                                {:state state})})]
+    (is (= (range 20) (mapv :state (take 20 visits))))
+    (is (= (range 20) @decoded))
+    (is (= (into [:root] (range 20)) @expanded))))
+
+(deftest postorder-can-prune-an-infinite-successor-sequence
+  (let [decoded (atom [])
+        visits (search/postorder
+                (fn [state] (when (= :root state) (range)))
+                [:root]
+                {:decode-edge (fn [state]
+                                (swap! decoded conj state)
+                                {:state state})
+                 :extensions
+                 [{:continue? (fn [_ processed] (< (count processed) 3))
+                   :exit (fn [_ children]
+                           {:children (mapv :state children)})}]})]
+    (is (= [{:state 0 :children []}
+            {:state 1 :children []}
+            {:state 2 :children []}
+            {:state :root :children [0 1 2]}]
+           (vec visits)))
+    (is (= [0 1 2] @decoded))))
+
+(deftest postorder-agrees-with-a-recursive-reference-on-cyclic-graphs
+  (let [random (java.util.Random. 271828)]
+    (dotimes [_ 60]
+      (let [graph (into {}
+                        (for [source (range 12)]
+                          [source (vec (filter (fn [_] (zero? (.nextInt random 4)))
+                                               (range 12)))]))
+            known (atom #{})
+            expected (atom [])]
+        (letfn [(visit [state]
+                  (when-not (contains? @known state)
+                    (swap! known conj state)
+                    (doseq [child (graph state)]
+                      (visit child))
+                    (swap! expected conj state)))]
+          (doseq [start (range 12)]
+            (visit start)))
+        (is (= @expected
+               (mapv :state (search/postorder graph (range 12)))))))))
+
+(deftest best-first-replaces-improvements-without-changing-fifo-ties
+  (let [graph {:root [[:goal 9] [:a 1] [:b 2] [:c 3]]
+               :a [[:goal 5]]
+               :b [[:goal 1]]
+               :c [[:goal 0]]
+               :goal [[:root 0]]}
+        visits (vec (search/best-first
+                     graph [:root :root]
+                     {:decode-edge (fn [[state weight]]
+                                     {:state state :weight weight})
+                      :extensions [search/path-extension]}))]
+    (is (= [:root :a :b :c :goal] (mapv :state visits)))
+    (is (= [0 1 2 3 3] (mapv :distance visits)))
+    (is (= [:root :b :goal] (:path (peek visits))))))
+
+(deftest best-first-keeps-only-one-queued-candidate-per-key
+  (let [enqueue @#'search/enqueue
+        peak (atom 0)
+        graph {:root (mapv (fn [weight] {:state :goal :weight weight})
+                          (range 1000 0 -1))}
+        visits
+        (with-redefs-fn
+          {#'search/enqueue
+           (fn [& args]
+             (let [state (apply enqueue args)]
+               (swap! peak max (count (second state)))
+               state))}
+          #(vec (search/best-first graph [:root] {:decode-edge identity})))]
+    (is (= [[:root 0] [:goal 1]]
+           (mapv (juxt :state :distance) visits)))
+    (is (= 1 @peak))))
+
+(deftest best-first-agrees-with-reference-relaxation
+  (let [random (java.util.Random. 481516)]
+    (dotimes [_ 60]
+      (let [size 12
+            graph (into {}
+                        (for [source (range size)]
+                          [source
+                           (vec (for [destination (range size)
+                                      :when (zero? (.nextInt random 4))]
+                                  {:state destination
+                                   :weight (.nextInt random 10)}))]))
+            reference
+            (nth (iterate
+                  (fn [distances]
+                    (reduce-kv
+                     (fn [result source distance]
+                       (reduce (fn [result {:keys [state weight]}]
+                                 (update result state
+                                         #(if (nil? %)
+                                            (+ distance weight)
+                                            (min % (+ distance weight)))))
+                               result
+                               (graph source)))
+                     distances
+                     distances))
+                  {0 0})
+                 (dec size))
+            visits (vec (search/best-first graph [0] {:decode-edge identity}))]
+        (is (= reference (into {} (map (juxt :state :distance)) visits)))
+        (is (= (count reference) (count visits)))))))
+
 (deftest dfs-walks-depth-first-and-reports-each-state-once
   (is (= [:a :b :d :c]
          (mapv :state
@@ -272,9 +614,9 @@
 
 (deftest postorder-can-stop-after-a-cached-result
   (let [extension
-        {:more? (fn [{:keys [state]} previous]
+        {:continue? (fn [{:keys [state]} processed]
                   (or (not= state :root)
-                      (not-any? :ready? previous)))
+                      (not-any? :ready? processed)))
          :exit (fn [{:keys [state]} successors]
                  (if (= state :root)
                    {:selected (or (some #(when (:ready? %) (:state %))
@@ -290,11 +632,11 @@
                                      [:root]
                                      {:extensions [extension]}))))))
 
-(deftest postorder-more-checks-before-decoding-the-next-successor
+(deftest postorder-continue-checks-before-decoding-the-next-successor
   (let [decoded (atom [])
-        extension {:more? (fn [{:keys [state]} previous]
+        extension {:continue? (fn [{:keys [state]} processed]
                             (or (not= state :root)
-                                (not-any? :available? previous)))
+                                (not-any? :available? processed)))
                    :exit (fn [{:keys [state]} _successors]
                            {:available? (= state :cached)})}
         visits (search/postorder {:root [:cached :fallback]
@@ -310,7 +652,7 @@
 
 (deftest postorder-next-callback-sees-finished-siblings
   (let [extension {:next (fn [parent _transition _visit]
-                           {:finished (mapv :state (:previous parent))})}
+                           {:finished (mapv :state (:processed-successors parent))})}
         right (some #(when (= :right (:state %)) %)
                     (search/postorder {:root [:left :right]
                                          :left []
@@ -674,12 +1016,12 @@
     (is (= [10 110 110 2210] (mapv ::size visits)))))
 
 (deftest postorder-context-key-keeps-depth-pruned-results-separate
-  (doseq [pruning [:expand? :more?]]
+  (doseq [pruning [:expand? :continue?]]
     (let [subtree-size
           (cond-> {:exit (fn [_ children]
                            {::size (inc (reduce + 0 (map ::size children)))})}
-            (= pruning :more?)
-            (assoc :more? (fn [visit _] (< (:depth visit) 2))))
+            (= pruning :continue?)
+            (assoc :continue? (fn [visit _] (< (:depth visit) 2))))
           options
           (cond-> {:visit-key (juxt :state :depth)
                    :extensions [search/depth-extension subtree-size]}

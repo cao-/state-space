@@ -170,7 +170,7 @@ earlier extensions at that stage, and later results override same-named
 context fields. Callbacks must preserve \code{:state}; use separate keys
 for context, preferably namespaced keywords in independently reusable
 extensions to avoid accidental collisions. Post-order traversal reserves
-\code{:previous}, \code{:via}, and \code{:back-edge} for its callback views;
+\code{:processed-successors}, \code{:via}, and \code{:back-edge} for its callback views;
 extensions must not use these as their own context fields.
 These are caller expectations, not runtime checks; inputs that violate them
 may produce unexpected results.
@@ -324,7 +324,7 @@ several raw successors when its first item is requested.
 
 Post-order traversal also supports callbacks for processing completed
 successors and pruning the remaining ones. These \code{:exit} and
-\code{:more?} hooks are specific to post-order traversal; their examples
+\code{:continue?} hooks are specific to post-order traversal; their examples
 appear in section~\ref[transitions]{Additional visit and transition data}.
 
 \secc[propagation] State propagation
@@ -748,7 +748,7 @@ For example, count the tasks in each dependency subtree:
 ;;     {:state :config :size 1} {:state :app :size 4})
 \endtt
 
-An extension's \code{:more?} callback can stop consuming successors based
+An extension's \code{:continue?} callback can stop consuming successors based
 on those already processed. It receives the current visit and the vector
 of successor visits processed so far, and returns whether to consider
 another successor. Here, a~cached build result prevents exploring the
@@ -756,9 +756,9 @@ fallback build:
 
 \begtt \hisyntax{clojure}
 (def cache-or-build
-  {:more? (fn [{:keys [state]} previous]
+  {:continue? (fn [{:keys [state]} processed]
             (or (not= state :root)
-                (not-any? :ready? previous)))
+                (not-any? :ready? processed)))
    :exit (fn [{:keys [state]} successors]
            (if (= state :root)
              {:selected (or (some #(when (:ready? %) (:state %)) successors)
@@ -774,14 +774,14 @@ fallback build:
 ;;     {:state :root, :selected :cached})
 \endtt
 
-A~\code{:next} callback can use completed siblings while extending the next
+A~\code{:next} callback can use processed successors while extending the next
 visit. Here it records each dependency's position in its parent's successor
 order:
 
 \begtt \hisyntax{clojure}
 (def sibling-position
   {:next (fn [parent _transition _visit]
-           {:position (count (:previous parent))})})
+           {:position (count (:processed-successors parent))})})
 
 (take 2
       (ss/postorder {:app [:lib :config]
@@ -792,8 +792,9 @@ order:
 ;; => ({:state :lib :position 0} {:state :config :position 1})
 \endtt
 
-The \code{:next} callback receives the parent visit with its completed
-successors in \code{:previous}. The \code{:exit} callback receives those
+The parent passed to \code{:next} contains \code{:processed-successors}:
+successor views handled so far, including back edges.
+The \code{:exit} callback receives those
 successor visits; each carries \code{:via}, the transition from this parent,
 and \code{:back-edge}, true if it refers to a~visit still being explored.
 Back edges have no exit values. This lets an exit callback inspect cycles
@@ -825,13 +826,13 @@ its computed fields. Use \ref[propagation]{propagation} instead when
 information must circulate until it stabilizes. If a~result depends on its
 route, choose a~visit key that distinguishes the relevant context rather
 than reusing another route's result. This includes context used by
-\code{:expand?} or \code{:more?}: a~result computed under one budget or
+\code{:expand?} or \code{:continue?}: a~result computed under one budget or
 pruning window is not automatically valid under another. Equal keys must
 identify interchangeable computations; a~later arrival does not recompute
 the cached result.
 The key must remain stable from entry through completion: \code{:exit}
 callbacks may add computed fields, but must not change the visit's identity.
-The reserved \code{:previous}, \code{:via}, and \code{:back-edge} fields are
+The reserved \code{:processed-successors}, \code{:via}, and \code{:back-edge} fields are
 supplied in callback views, not guaranteed on emitted visits. These input
 expectations are not checked at runtime.
 
@@ -857,7 +858,7 @@ callbacks, described in
 * \code{:extensions} is an ordered collection of maps, empty by default.
   \code{:start}, \code{:next}, and (for post-order traversal)
   \code{:exit} callbacks return maps of visit fields to add or replace.
-  Post-order traversal's \code{:more?} callbacks are checked before
+  Post-order traversal's \code{:continue?} callbacks are checked before
   consuming and decoding the next successor; all must allow it for traversal
   to proceed.
   This check can also happen once when a~visit has no successors.
@@ -899,6 +900,8 @@ lazy, so use a~bounded operation such as \code{take} or \code{first} with
 \code{filter} when only part of a~result is needed. Post-order traversal is
 lazy between completed visits, but a~parent is not returned until its
 successors have been processed.
+An infinite sequence of leaf successors can therefore produce completed
+visits indefinitely, although its parent cannot finish unless pruned.
 
 Laziness does not mean constant memory or exactly one callback per returned
 visit. Deduplication retains seen keys, BFS retains a~pending frontier, and
@@ -984,6 +987,8 @@ already a~state or is decoded into a~transition map. Its \code{:state}
 becomes the child's state, while the remaining transition fields are passed
 to \code{:next} callbacks. This gives path, depth, trail, and application
 specific extensions one shared lifecycle.
+Callback maps are reduced directly by key and value into the visit, in
+extension order.
 
 \begingroup
 \typosize[8/9]
@@ -994,12 +999,12 @@ specific extensions one shared lifecycle.
 
 \secc Preparing a search
 
-Options are resolved once at the start of an algorithm. The space is called
+The \code{search-options} helper resolves shared graph-search defaults once
+at the start of an algorithm. The space is called
 with the projected visit, and \code{:expand?} can make a visit a leaf without
 removing it from the results. Decoding then gives each raw successor a
 uniform transition-map shape. The local \code{map-lazy} helper delays its
-mapping function one item at a time; it is used where preparing each start
-visit or decoded transition should wait until that item is requested.
+mapping function one item at a time when initializing starts.
 
 \begingroup
 \typosize[8/9]
@@ -1013,7 +1018,7 @@ visit or decoded transition should wait until that item is requested.
 The results of the searches are lazy, but laziness here does not promise that
 exactly one callback or successor is processed for each requested result.
 \code{map-lazy} invokes its mapping function one item at a time; it is used
-where start visits and post-order transitions are prepared. Other sequence
+where start visits are prepared. Other sequence
 operations, such as \code{keep} in the shared traversal, can realize a chunk
 when their input is chunked. The space itself also controls how its
 successors are produced, so consuming one raw successor may realize several
@@ -1022,11 +1027,16 @@ must examine all successors of the expanded visit before it can choose the
 next visit by priority.
 Propagation updates are processed one state at a time, but all of that
 state's successors are joined before its progress record is returned.
+Its initial record does not require constructing the worklist; that is
+deferred until the first processing record is requested.
 
 DFS and BFS keep pending work in a frontier of lazy chunks. A stack takes the
 newest chunk first; a queue takes the oldest. Both consume items from the
 current chunk in order, so successors retain their order without first being
 flattened into one collection.
+Successor generation itself is delayed until the chunk is consumed.
+In BFS, earlier chunks can therefore supply visits without expanding those
+visits or requesting work from later chunks.
 
 \begingroup
 \typosize[8/9]
@@ -1059,13 +1069,19 @@ entering a visit and resuming its parent. The local operations make those
 steps explicit: \code{enter} marks a visit known and schedules its
 continuation; \code{continue} records a completed child and schedules the
 next one; \code{finish} runs bottom-up callbacks and emits the visit.
+Pending frames form a sequence stack: each step prepends individual frames,
+with lazily initialized starts at its tail. No chunk frontier is needed.
 \code{known} stores the first visit for each key; \code{done} distinguishes
 completed nodes from nodes still active on the current path. When a child
-finishes, the parent records it in \code{:previous}; that same vector is
-passed to \code{:next}, \code{:more?}, and ultimately \code{:exit}. Checking
-\code{:more?} before consuming the next transition lets the algorithm stop
+finishes, the parent records it in \code{:processed-successors}; that same vector is
+passed to \code{:next}, \code{:continue?}, and ultimately \code{:exit}. Checking
+\code{:continue?} before consuming the next transition lets the algorithm stop
 before decoding or visiting a remaining successor. A chunked source may
 nevertheless realize multiple raw successors as one is consumed.
+If \code{:continue?} rejects the first successor, the space and expansion
+callbacks are not called for that visit.
+Remaining successors are stored raw and decoded directly by \code{continue}
+after the pruning check, without an intermediate mapped sequence.
 
 \begingroup
 \typosize[8/9]
@@ -1077,9 +1093,9 @@ nevertheless realize multiple raw successors as one is consumed.
 \secc Best-first traversal
 
 Best-first orders pending visits by priority, so it uses a sorted map rather
-than the DFS/BFS frontier. \code{best} records the best priority queued for
-each visit key; when a better route is found, the older queue entry is left
-in place and discarded as stale when popped. \code{settled} ensures each key
+than the DFS/BFS frontier. \code{queued} records the queue position for
+each pending visit key; a better route replaces its previous queue entry,
+so only one candidate per key remains pending. \code{settled} ensures each key
 is emitted once. A monotonically increasing sequence number makes equal
 priorities stable in insertion order. The default cumulative-distance
 priority has Dijkstra's shortest-path behavior when edge weights are
