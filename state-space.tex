@@ -171,8 +171,14 @@ that stage.
 
 Extensions run in order. Each callback sees the visit fields added by
 earlier extensions at that stage, and later results override same-named
-fields. Normally keep \code{:state} for the domain value and use separate
-keys for context. Section~\ref[transitions]{Additional visit and transition
+context fields. Callbacks must preserve \code{:state}; use separate keys
+for context, preferably namespaced keywords in independently reusable
+extensions to avoid accidental collisions. Post-order traversal reserves
+\code{:previous}, \code{:via}, and \code{:back-edge} for its callback views;
+extensions must not use these as their own context fields.
+These are caller expectations, not runtime checks; inputs that violate them
+may produce unexpected results.
+Section~\ref[transitions]{Additional visit and transition
 data} shows a~custom extension using all these inputs.
 
 \secc Breadth-first search
@@ -824,6 +830,11 @@ its computed fields. Use \ref[propagation]{propagation} instead when
 information must circulate until it stabilizes. If a~result depends on its
 route, choose a~visit key that distinguishes the relevant context rather
 than reusing another route's result.
+The key must remain stable from entry through completion: \code{:exit}
+callbacks may add computed fields, but must not change the visit's identity.
+The reserved \code{:previous}, \code{:via}, and \code{:back-edge} fields are
+supplied in callback views, not guaranteed on emitted visits. These input
+expectations are not checked at runtime.
 
 For option defaults and termination behavior, see
 section~\ref[options]{Options and termination}.

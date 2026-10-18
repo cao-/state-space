@@ -143,7 +143,12 @@
   containing :state; DFS uses that destination. Ordered :extensions add
   derived visit values and can inspect all decoded transition fields.
   Extensions are maps with :start and :next callbacks returning visit-context
-  maps. Inputs are the caller's responsibility and are not validated."
+  maps. Callbacks must preserve :state. Custom context fields merge in
+  extension order, with later fields replacing earlier ones; use namespaced
+  keys for independently reusable extensions to avoid accidental collisions.
+  Postorder reserves :previous, :via, and :back-edge for its callback views.
+  Inputs are the caller's responsibility and are not validated; violating
+  these expectations may produce unexpected results."
   ([space starts]
    (dfs space starts {}))
   ([space starts options]
@@ -221,7 +226,9 @@
   A node is marked known when first entered, so cyclic graphs terminate: a
   back edge is simply ignored, and the result is then the plain DFS
   post-order (a valid topological order exactly when the reachable graph is
-  a DAG). Options are as in dfs, but :visit-key must not be nil.
+  a DAG). Options are as in dfs, but :visit-key must not be nil. Its result
+  must remain stable from entry through completion: :exit callbacks must not
+  change fields in a way that changes the visit key.
 
   Extensions may also define :exit, a function of a visit and the visits of
   its successors returning a map merged into the visit as it is emitted: a
@@ -232,7 +239,10 @@
   and each carries two keys describing the edge it was reached by in this
   particular parent: :via, the decoded transition (so edge weights and labels
   are available even when the node was first reached through another edge),
-  and :back-edge, true when the successor was still in progress.
+  and :back-edge, true when the successor was still in progress. Extensions
+  must not define :previous, :via, or :back-edge as their own context fields;
+  these keys are reserved for postorder's callback views, not guaranteed
+  fields on emitted visits. These expectations are not checked at runtime.
 
   Successors are consumed and decoded one at a time. Callbacks may also see
   siblings finished so far: :next receives the parent with a :previous key,

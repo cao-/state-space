@@ -536,6 +536,43 @@
                             [:a]
                             {:extensions [steps-extension]}))))))
 
+(deftest extensions-compose-in-order-and-can-replace-custom-fields
+  (let [initial {:start (fn [_] {::value 1})
+                 :next (fn [parent _ _]
+                         {::value (inc (::value parent))})}
+        adjust {:start (fn [visit]
+                          {::value (* 10 (::value visit))})
+                :next (fn [_ _ visit]
+                        {::value (* 10 (::value visit))})}]
+    (doseq [algorithm [search/dfs search/bfs search/simple-paths
+                       search/postorder search/best-first]]
+      (let [visits (algorithm {:a [:b]} [:a]
+                             {:extensions [initial adjust]})]
+        (is (= {:a 10 :b 110}
+               (into {} (map (juxt :state ::value)) visits)))))))
+
+(deftest postorder-exit-composes-with-stable-custom-identity-and-shared-results
+  (let [identity-extension {:start (fn [visit] {::id (:state visit)})
+                            :next (fn [_ _ visit] {::id (:state visit)})}
+        count-extension {:exit (fn [_ children]
+                                 {::size (inc (reduce + 0 (map ::size children)))})}
+        adjust-extension {:exit (fn [visit _]
+                                  {::original-size (::size visit)
+                                   ::size (* 10 (::size visit))})}
+        visits (vec (search/postorder
+                     {:root [:left :right]
+                      :left [:shared]
+                      :right [:shared]}
+                     [:root]
+                     {:visit-key ::id
+                      :extensions [identity-extension
+                                   count-extension
+                                   adjust-extension]}))]
+    (is (= [:shared :left :right :root] (mapv :state visits)))
+    (is (= (mapv :state visits) (mapv ::id visits)))
+    (is (= [1 11 11 221] (mapv ::original-size visits)))
+    (is (= [10 110 110 2210] (mapv ::size visits)))))
+
 (deftest projection-can-give-a-space-the-whole-visit
   (let [successors (fn [{:keys [state depth]}]
                      (if (< depth 2) [(inc state)] []))]
