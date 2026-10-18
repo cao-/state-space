@@ -13,20 +13,6 @@
           visit
           extensions))
 
-(defn- successor-visit [extensions parent transition]
-  (extend-visit extensions parent transition {:state (:state transition)}))
-
-(defn- finish-visit
-  "Bottom-up counterpart of extend-visit: extensions with an :exit callback
-  add values computed from the visit and its already finished successors."
-  [extensions visit children]
-  (reduce (fn [visit extension]
-            (if-let [exit (:exit extension)]
-              (reduce-kv assoc visit (exit visit children))
-              visit))
-          visit
-          extensions))
-
 (defn accumulate
   "Builds an extension that carries one value along every route under key k.
 
@@ -81,12 +67,25 @@
 (defn- default-decode-edge [successor]
   {:state successor})
 
+(defn- visit-preparer
+  "Selects base-visit construction and extension application once per search."
+  [{:keys [decode-edge extensions]}]
+  (let [base-visit (if (identical? decode-edge default-decode-edge)
+                     identity
+                     (fn [transition] {:state (:state transition)}))]
+    (if (seq extensions)
+      (fn [parent transition]
+        (extend-visit extensions parent transition (base-visit transition)))
+      (fn [_parent transition]
+        (base-visit transition)))))
+
 (defn- search-options [options]
-  {:project (get options :project :state)
-   :decode-edge (get options :decode-edge default-decode-edge)
-   :extensions (vec (get options :extensions []))
-   :visit-key (get options :visit-key :state)
-   :expand? (get options :expand? (constantly true))})
+  (let [opts {:project (get options :project :state)
+              :decode-edge (get options :decode-edge default-decode-edge)
+              :extensions (vec (get options :extensions []))
+              :visit-key (get options :visit-key :state)
+              :expand? (get options :expand? (constantly true))}]
+    (assoc opts :prepare-visit (visit-preparer opts))))
 
 (defn- map-lazy
   "Unlike chunked map, invokes f only for the requested item."
@@ -102,7 +101,7 @@
 (defn- explore
   "Shares lazy traversal mechanics; frontier operations define visit order.
   An optional refine function maps (parent candidate) to a candidate or nil."
-  [space {:keys [decode-edge extensions visit-key] :as opts} refine
+  [space {:keys [decode-edge prepare-visit visit-key] :as opts} refine
    visited pending pop-item push-chunk]
   (lazy-seq
    (loop [visited visited
@@ -118,8 +117,7 @@
                          (lazy-seq
                           (keep (fn [successor]
                                   (let [transition (decode-edge successor)
-                                        candidate (successor-visit
-                                                   extensions visit transition)]
+                                        candidate (prepare-visit visit transition)]
                                     (if refine
                                       (refine visit candidate)
                                       candidate)))
@@ -157,7 +155,8 @@
   maps. Callbacks must preserve :state. Custom context fields merge in
   extension order, with later fields replacing earlier ones; use namespaced
   keys for independently reusable extensions to avoid accidental collisions.
-  Postorder reserves :processed-successors, :via, and :back-edge for its callback views.
+  Postorder reserves :value for fold results and :via and :back-edge for
+  successor views.
   :start and :next prepare candidates before duplicate or path-repeat
   rejection, so they may run for visits that are never emitted. Prefer pure
   callbacks; use result consumption for actions on emitted visits.
@@ -222,115 +221,101 @@
 (defn postorder
   "Lazily returns visits in depth-first post-order.
 
-  Each visit is returned after all of its successors, so when edges point
-  from a task to its prerequisites, prerequisites appear before the task.
-  A node is marked known when first entered, so cyclic graphs terminate: a
-  back edge is simply ignored, and the result is then the plain DFS
-  post-order (a valid topological order exactly when the reachable graph is
-  a DAG). Options are as in dfs, but :visit-key must not be nil. Its result
-  must remain stable from entry through completion: :exit callbacks must not
-  change fields in a way that changes the visit key.
+  Successors precede their parents; shared keys are evaluated once. Back
+  edges are not followed, so finite graphs terminate even with cycles.
+  The order is topological only for a DAG. Options are as in dfs;
+  :visit-key must not be nil.
 
-  Extensions may also define :exit, a function of a visit and the visits of
-  its successors returning a map merged into the visit as it is emitted: a
-  bottom-up computation over the successors' own results. Each successor
-  appears as the visit that first reached that node: finished, with its :exit
-  values, or, for a back edge to a node still in progress, with top-down
-  values only. Equal visit keys must identify interchangeable computations:
-  include relevant route context in the key when expansion, :continue? pruning,
-  or computed results depend on it. A cached result from one budget or
-  pruning window is not automatically valid under another; later arrivals
-  do not recompute it. These are caller expectations, not runtime checks.
-  Successors are reported in the order the space produced them,
-  and each carries two keys describing the edge it was reached by in this
-  particular parent: :via, the decoded transition (so edge weights and labels
-  are available even when the node was first reached through another edge),
-  and :back-edge, true when the successor was still in progress. Extensions
-  must not define :processed-successors, :via, or :back-edge as their own context fields;
-  these keys are reserved for postorder's callback views, not guaranteed
-  fields on emitted visits. These expectations are not checked at runtime.
+  Optional :fold computes a :value on each completed visit. It is a map:
+    :init   (visit -> accumulator), required
+    :step   (accumulator successor-view -> accumulator), required
+    :finish (accumulator -> value), defaults to identity.
+  Each newly entered key gets its own accumulator. :step runs once per
+  examined edge in successor order, including edges to cached visits. A
+  successor view has :state, route context, its completed :value, :via (the
+  transition from this parent), and :back-edge. An unfinished back-edge view
+  has no :value; the step must handle it explicitly. Use propagate for cyclic
+  fixed points.
 
-  Successors are consumed and decoded one at a time. The :next callback
-  receives the parent with :processed-successors, a vector of successor
-  views handled so far, including back edges (in the same form as in :exit).
-  An extension's :continue? callback, a function of the visit and that vector,
-  is checked before consuming and decoding the next successor,
-  including the first. Rejecting the first successor also avoids calling
-  :expand?, :project, and the space for that visit.
-  If any callback returns false, no next successor is
-  decoded or visited and the visit is finished with what it has. A chunked
-  successor collection may realize more raw values when one is consumed. The
-  check also happens once when a visit has no successors, so callbacks should
-  not assume another successor exists. Together these hooks let information
-  flow from earlier siblings to later ones, as in alpha-beta pruning or
-  short-circuit evaluation."
+  Return (reduced accumulator) from :init or :step to finish this visit
+  without requesting another successor. :finish receives the unwrapped
+  accumulator and is called exactly once per completed key, including leaves
+  and early stops. Reducing a parent happens when consumption resumes after
+  its child is yielded. Chunked inputs may realize extra raw successors,
+  but no further edge is decoded after reduction stops.
+
+  Accumulators are private to parent frames: they are not route context and
+  are not passed to :next or the space. Children are not collected; accumulate
+  them explicitly if needed. The cache still retains completed visits.
+  Extensions define only :start and :next, as in the other searches.
+  :value, :via, and :back-edge are reserved and must not be extension fields.
+  Keys must be stable and identify interchangeable computations, including
+  any route context affecting expansion or the fold. Cached visits are not
+  recomputed for a later arrival with the same key. These input contracts
+  are the caller's responsibility and are not validated."
   ([space starts]
    (postorder space starts {}))
   ([space starts options]
-   (let [{:keys [decode-edge extensions visit-key] :as opts} (search-options options)
-         continue? (keep :continue? extensions)]
-     (letfn [(finish [known done pending visit processed]
-               (let [finished (finish-visit extensions visit processed)
-                     key (visit-key visit)]
-                 (cons finished
-                       (walk (assoc known key finished)
-                             (conj done key)
-                             pending))))
-             (continue [known done pending visit processed remaining awaiting]
-               (let [processed (if awaiting
-                                (let [[key transition] awaiting]
-                                  (conj processed
-                                        (assoc (known key)
-                                               :via transition
-                                               :back-edge (not (contains? done key)))))
-                                processed)]
-                 (if-let [remaining (when (every? #(% visit processed) continue?)
-                                      (seq remaining))]
-                   (let [transition (decode-edge (first remaining))
-                         child (successor-visit extensions
-                                                (assoc visit :processed-successors processed)
-                                                transition)
-                         resume-parent {:kind :continue
-                                        :visit visit
-                                        :processed-successors processed
-                                        :remaining (rest remaining)
-                                        :awaiting [(visit-key child) transition]}]
-                     (walk known done
-                           (cons {:kind :enter :visit child}
-                                 (cons resume-parent pending))))
-                   (finish known done pending visit processed))))
-             (enter [known done pending visit]
-               (let [key (visit-key visit)]
-                 (if (contains? known key)
-                   (walk known done pending)
-                   (let [resume-visit {:kind :continue
-                                      :visit visit
-                                      :processed-successors []
-                                      :remaining
-                                      (lazy-seq
-                                       (successors-of space opts visit))}]
-                     (walk (assoc known key visit)
-                           done
-                           (cons resume-visit pending))))))
-             (walk [known done pending]
+   (let [{:keys [decode-edge extensions prepare-visit visit-key] :as opts}
+         (search-options options)
+         fold (:fold options)
+         {:keys [init step] complete :finish
+          :or {complete identity}} fold]
+     (letfn [(fold-child [accumulator child transition]
+               (step accumulator
+                     (-> child
+                         (assoc :via transition)
+                         (assoc :back-edge (not (contains? child :value))))))
+             (walk [known pending]
                (lazy-seq
-                (when-let [pending (seq pending)]
-                  (let [item (first pending)
-                        pending (rest pending)]
-                    (case (:kind item)
-                      :enter
-                      (enter known done pending (:visit item))
+                (loop [known known, pending pending]
+                  (when-let [pending (seq pending)]
+                    (let [[kind visit key accumulator remaining awaiting] (first pending)
+                          pending (rest pending)]
+                      (case kind
+                        :enter
+                        (if (contains? known key)
+                          (recur known pending)
+                          (recur (assoc known key visit)
+                                 (cons [:continue visit key
+                                        (when fold (init visit))
+                                        (lazy-seq (successors-of space opts visit))
+                                        nil]
+                                       pending)))
 
-                      :continue
-                      (continue known done pending
-                                (:visit item)
-                                (:processed-successors item)
-                                (:remaining item)
-                                (:awaiting item)))))))]
-       (walk {} #{}
+                        :continue
+                        (loop [accumulator
+                              (if (and fold awaiting)
+                                (let [[child-key transition] awaiting]
+                                  (fold-child accumulator (known child-key) transition))
+                                accumulator)
+                               remaining remaining]
+                          (if-let [remaining (when-not (reduced? accumulator)
+                                               (seq remaining))]
+                            (let [transition (decode-edge (first remaining))
+                                  child (prepare-visit visit transition)
+                                  child-key (visit-key child)]
+                              (if (contains? known child-key)
+                                (recur (if fold
+                                         (fold-child accumulator (known child-key) transition)
+                                         accumulator)
+                                       (rest remaining))
+                                (walk known
+                                      (cons [:enter child child-key]
+                                            (cons [:continue visit key accumulator
+                                                   (rest remaining) [child-key transition]]
+                                                  pending)))))
+                            (let [finished (if fold
+                                             (assoc visit :value
+                                                    (complete (unreduced accumulator)))
+                                             visit)]
+                              (cons finished
+                                    (walk (assoc known key finished)
+                                          pending)))))))))))]
+       (walk {}
              (map-lazy (fn [state]
-                         {:kind :enter
-                          :visit (initialize-visit extensions {:state state})})
+                         (let [visit (initialize-visit extensions {:state state})]
+                           [:enter visit (visit-key visit)]))
                        starts))))))
 
 (defn propagate
@@ -435,12 +420,12 @@
 
 (defn- relax
   "Queues improved candidates for the successors of a settled visit."
-  [space {:keys [decode-edge extensions] :as opts} visit settled state]
+  [space {:keys [decode-edge prepare-visit] :as opts} visit settled state]
   (reduce
    (fn [state successor]
      (let [transition (decode-edge successor)]
        (enqueue opts
-                (successor-visit extensions visit transition)
+                (prepare-visit visit transition)
                 settled
                 state)))
    state

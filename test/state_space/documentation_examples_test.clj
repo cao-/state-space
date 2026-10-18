@@ -4,9 +4,14 @@
             [clojure.test :refer [deftest is]]))
 
 (defn- clojure-documentation-examples [source]
-  (->> (re-seq #"(?s)\\begtt \\hisyntax\{clojure\}\r?\n(.*?)\\endtt"
-               (slurp source))
-       (map second)))
+  (let [content (slurp source)]
+    (if (str/ends-with? source ".md")
+      (->> (re-seq #"(?s)```clojure\r?\n(.*?)```" content)
+           (map second)
+           (filter #(re-find #"(?m)^\s*;; =>" %)))
+      (->> (re-seq #"(?s)\\begtt \\hisyntax\{clojure\}\r?\n(.*?)\\endtt"
+                   content)
+           (map second)))))
 
 (defn- evaluate-documentation-code [example-ns code]
   (binding [*ns* example-ns]
@@ -39,8 +44,8 @@
         (some (complement str/blank?) code)
         (conj {:code (str/join "\n" code)})))))
 
-(deftest published-clojure-examples-match-their-displayed-results
-  (doseq [source ["state-space.tex" "worked-examples.tex"]]
+(deftest documented-clojure-examples-match-their-displayed-results
+  (doseq [source ["README.md" "state-space.tex" "worked-examples.tex"]]
     (let [examples (clojure-documentation-examples source)
           example-ns (create-ns (gensym "state-space.documentation.examples"))]
       (is (seq examples) (str "Expected Clojure examples in " source))

@@ -34,9 +34,10 @@ The algorithm sections introduce the core searches in order. The later
 sections on \ref[identity]{visit identity},
 \ref[transitions]{additional visit data}, and
 \ref[options]{termination} are reference material. All public operations
-and options are explained here; the companion Worked examples PDF provides
-practice rather than required background. Evaluate this guide's snippets in
-order in one REPL session.
+and options are explained here; the companion
+\ulink[https://github.com/cao-/state-space/releases/latest/download/worked-examples.pdf]
+{Worked examples PDF} provides practice rather than required background.
+Evaluate this guide's snippets in order in one REPL session.
 
 \secc Choosing an algorithm
 
@@ -60,9 +61,18 @@ Choose the operation by the result you need:
   joined and sent through the space again when it changes.
 \enditems
 
-Before searching, make the state contain everything that can affect future
-moves or the answer. For example, a~vehicle's position alone is not enough
-when its remaining fuel determines which moves are possible.
+Start with a~state and a~successor function. Put information that changes
+future moves in the state itself: for example, \code{[location fuel]} when
+remaining fuel determines which roads are usable. The default identity then
+distinguishes those search positions without custom callbacks.
+Add route context, such as a~path or distance, when it is needed; extensions
+and custom visit keys are not prerequisites for using the library.
+
+Search results are ordinary sequences: select goals with \code{filter} or
+\code{some}, take a~prefix with \code{take}, or collect results with
+\code{into}. A~fixed sequence of values or a~flat first-match lookup can
+already be expressed with \code{reductions} or \code{some}; it does not
+need a~search.
 
 \secc Search spaces and depth-first search
 
@@ -170,7 +180,8 @@ earlier extensions at that stage, and later results override same-named
 context fields. Callbacks must preserve \code{:state}; use separate keys
 for context, preferably namespaced keywords in independently reusable
 extensions to avoid accidental collisions. Post-order traversal reserves
-\code{:processed-successors}, \code{:via}, and \code{:back-edge} for its callback views;
+\code{:value} for computed fold results, and \code{:via} and
+\code{:back-edge} for successor views;
 extensions must not use these as their own context fields.
 These are caller expectations, not runtime checks; inputs that violate them
 may produce unexpected results.
@@ -322,9 +333,8 @@ The library decodes transitions and runs extension callbacks one at a~time.
 A~chunked lazy successor collection returned by the space may itself compute
 several raw successors when its first item is requested.
 
-Post-order traversal also supports callbacks for processing completed
-successors and pruning the remaining ones. These \code{:exit} and
-\code{:continue?} hooks are specific to post-order traversal; their examples
+Post-order traversal also supports a~streaming \code{:fold} over completed
+successors, with \code{reduced} for early stopping. Its examples
 appear in section~\ref[transitions]{Additional visit and transition data}.
 
 \secc[propagation] State propagation
@@ -421,7 +431,8 @@ not need this operation; the next section covers
 \code{best-first} chooses the pending visit with the lowest priority.
 By default its \code{:distance} is the sum of transition weights, with each
 edge costing one unless \code{:decode-edge} supplies a~\code{:weight}. It is therefore
-Dijkstra's search when weights are finite and non-negative:
+\ulink[https://en.wikipedia.org/wiki/Dijkstra's_algorithm]{Dijkstra's search}
+when weights are finite and non-negative:
 
 \begtt \hisyntax{clojure}
 (def routes {:home [:slow :quick]
@@ -455,7 +466,8 @@ defaulting to one when that field is absent:
 \endtt
 
 An optional \code{:priority} function can order visits by something other than
-distance, or add an estimate of the remaining cost as in A* search. A custom
+distance, or add an estimate of the remaining cost as in
+\ulink[https://en.wikipedia.org/wiki/A*_search_algorithm]{A* search}. A custom
 priority does not automatically calculate \code{:distance}; include
 \code{ss/distance-extension} explicitly when the priority or results need
 it. For example, a~route planner can combine the cost already travelled with
@@ -727,113 +739,107 @@ called for that visit and no successors are generated:
 ;; => ({:state 0 :depth 0} {:state 1 :depth 1} {:state 2 :depth 2})
 \endtt
 
-Post-order traversal offers additional callbacks for work that depends on
-completed successors. An \code{:exit} callback can compute a~value after a~
-visit's successors have been processed. It receives the visit and a~vector
-of its successor visits, and returns fields to merge into the visit.
-For example, count the tasks in each dependency subtree:
+Post-order traversal can fold successor results into a~computed
+\code{:value}. Supply a~\code{:fold} map with \code{:init}, which receives
+each newly entered visit, and \code{:step}, which receives the accumulator
+and one successor view. For example, count the tasks in each dependency
+subtree:
 
 \begtt \hisyntax{clojure}
 (def subtree-size
-  {:exit (fn [_visit successors]
-           {:size (inc (reduce + (map :size successors)))})})
+  {:init (constantly 1)
+   :step (fn [size child] (+ size (:value child)))})
 
 (ss/postorder {:app [:lib :config]
                :lib [:base]
                :base []
                :config []}
               [:app]
-              {:extensions [subtree-size]})
-;; => ({:state :base :size 1} {:state :lib :size 2}
-;;     {:state :config :size 1} {:state :app :size 4})
+              {:fold subtree-size})
+;; => ({:state :base :value 1} {:state :lib :value 2}
+;;     {:state :config :value 1} {:state :app :value 4})
 \endtt
 
-An extension's \code{:continue?} callback can stop consuming successors based
-on those already processed. It receives the current visit and the vector
-of successor visits processed so far, and returns whether to consider
-another successor. Here, a~cached build result prevents exploring the
-fallback build:
+The accumulator belongs to its parent; it is not merged into route context
+or passed to the space or \code{:next}. Each child is evaluated once per
+visit key and contributes once per incoming edge. Counting distinct
+descendants therefore requires sets, not a~sum.
+No child vector is collected automatically. To keep children, explicitly
+accumulate a~vector; to compute a~scalar, retain only that scalar.
+The result cache remains necessary for sharing.
+
+An optional \code{:finish} function converts the final accumulator into
+the visit's \code{:value}; it defaults to \code{identity}. It runs once per
+completed key, including leaves and early stops. It can extract a~result
+from a~larger working accumulator. Return a~map value when computing
+several results together.
+
+Return \code{(reduced accumulator)} from \code{:step} to finish this parent
+without requesting another successor. Here a~cached result prevents
+exploring the fallback build:
 
 \begtt \hisyntax{clojure}
 (def cache-or-build
-  {:continue? (fn [{:keys [state]} processed]
-            (or (not= state :root)
-                (not-any? :ready? processed)))
-   :exit (fn [{:keys [state]} successors]
-           (if (= state :root)
-             {:selected (or (some #(when (:ready? %) (:state %)) successors)
-                            :build)}
-             {:ready? (= state :cached)}))})
+  {:init (fn [{:keys [state]}] (when (= state :cached) state))
+   :step (fn [selected child]
+           (if-let [source (:value child)]
+             (reduced source)
+             selected))})
 
 (ss/postorder {:root [:cached :build]
                :cached []
                :build []}
               [:root]
-              {:extensions [cache-or-build]})
-;; => ({:state :cached, :ready? true}
-;;     {:state :root, :selected :cached})
+              {:fold cache-or-build})
+;; => ({:state :cached, :value :cached}
+;;     {:state :root, :value :cached})
 \endtt
 
-A~\code{:next} callback can use processed successors while extending the next
-visit. Here it records each dependency's position in its parent's successor
-order:
+Returning \code{reduced} from \code{:init} also skips the first successor,
+without calling the space, projection, or expansion predicate.
+The wrapper is removed before \code{:finish}. Parent steps run when
+consumption resumes after yielding a~child; stopping at that child need not
+run its parent's step. Chunked input may realize extra raw successors, but
+no further transition is decoded after an early stop.
 
-\begtt \hisyntax{clojure}
-(def sibling-position
-  {:next (fn [parent _transition _visit]
-           {:position (count (:processed-successors parent))})})
-
-(take 2
-      (ss/postorder {:app [:lib :config]
-                     :lib []
-                     :config []}
-                    [:app]
-                    {:extensions [sibling-position]}))
-;; => ({:state :lib :position 0} {:state :config :position 1})
-\endtt
-
-The parent passed to \code{:next} contains \code{:processed-successors}:
-successor views handled so far, including back edges.
-The \code{:exit} callback receives those
-successor visits; each carries \code{:via}, the transition from this parent,
+Each successor view carries \code{:via}, the transition from this parent,
 and \code{:back-edge}, true if it refers to a~visit still being explored.
-Back edges have no exit values. This lets an exit callback inspect cycles
+Back edges have no computed \code{:value}. This lets a~fold inspect cycles
 without following them again:
 
 \begtt \hisyntax{clojure}
 (def edge-report
-  {:exit (fn [_visit successors]
-           {:edges (mapv (juxt :state (comp :kind :via) :back-edge)
-                         successors)})})
+  {:init (constantly [])
+   :step (fn [edges {:keys [state via back-edge]}]
+           (conj edges [state (:kind via) back-edge]))})
 
 (ss/postorder {:a [[:b :depends-on]]
                :b [[:a :depends-on]]}
               [:a]
               {:decode-edge (fn [[state kind]]
                               {:state state :kind kind})
-               :extensions [edge-report]})
-;; => ({:state :b :edges [[:a :depends-on true]]}
-;;     {:state :a :edges [[:b :depends-on false]]})
+               :fold edge-report})
+;; => ({:state :b :value [[:a :depends-on true]]}
+;;     {:state :a :value [[:b :depends-on false]]})
 \endtt
 
 Post-order traversal reuses the first visit for each key, including its
-computed exit values, when another parent reaches it. The \code{:via}
+computed \code{:value}, when another parent reaches it. The \code{:via}
 field describes the edge from the current parent, even if a~different
 parent first reached that state. Bottom-up computations on a~DAG can reuse
 completed successor values this way. On a~cycle, a~back edge refers to an
-unfinished visit, so an exit callback must not assume every successor has
+unfinished visit, so a~fold must not assume every successor has
 its computed fields. Use \ref[propagation]{propagation} instead when
 information must circulate until it stabilizes. If a~result depends on its
 route, choose a~visit key that distinguishes the relevant context rather
 than reusing another route's result. This includes context used by
-\code{:expand?} or \code{:continue?}: a~result computed under one budget or
+\code{:expand?} or the fold: a~result computed under one budget or
 pruning window is not automatically valid under another. Equal keys must
 identify interchangeable computations; a~later arrival does not recompute
 the cached result.
-The key must remain stable from entry through completion: \code{:exit}
-callbacks may add computed fields, but must not change the visit's identity.
-The reserved \code{:processed-successors}, \code{:via}, and \code{:back-edge} fields are
-supplied in callback views, not guaranteed on emitted visits. These input
+The key must remain stable from entry through completion; do not base it
+on the computed \code{:value}. The reserved \code{:via} and
+\code{:back-edge} fields are supplied in successor views, not on emitted visits. These input
 expectations are not checked at runtime.
 
 For option defaults and termination behavior, see
@@ -842,8 +848,8 @@ section~\ref[options]{Options and termination}.
 \secc[options] Options and termination
 
 The following options are common to the graph searches. Best-first also
-accepts \code{:priority}. Post-order traversal supports additional extension
-callbacks, described in
+accepts \code{:priority}. Post-order traversal supports a~\code{:fold},
+described in
 \ref[transitions]{Additional visit and transition data}.
 
 \begitems
@@ -856,12 +862,8 @@ callbacks, described in
   map containing \code{:state}. Without a~decoder, the raw successor is the
   state.
 * \code{:extensions} is an ordered collection of maps, empty by default.
-  \code{:start}, \code{:next}, and (for post-order traversal)
-  \code{:exit} callbacks return maps of visit fields to add or replace.
-  Post-order traversal's \code{:continue?} callbacks are checked before
-  consuming and decoding the next successor; all must allow it for traversal
-  to proceed.
-  This check can also happen once when a~visit has no successors.
+  \code{:start} and \code{:next} callbacks return maps of route-context fields
+  to add or replace.
 * \code{:visit-key} selects the key used for duplicate detection, applied to
   the full visit. It defaults to \code{:state}; its meaning and restrictions
   vary by algorithm.
@@ -871,6 +873,9 @@ callbacks, described in
   enables \code{distance-extension}. A custom priority does not add
   \code{:distance}; add \code{ss/distance-extension} to \code{:extensions}
   if it needs cumulative distance. Priority values must be mutually comparable.
+* Post-order traversal also accepts \code{:fold}, a~map with required
+  \code{:init} and \code{:step} functions and optional \code{:finish}.
+  Without a~fold it returns visits without a~computed \code{:value}.
 \enditems
 
 \code{simple-paths} uses \code{:visit-key} to prevent repeats on each route,
@@ -920,6 +925,34 @@ where allowed above. When supplied, \code{:decode-edge} must return a~map
 containing \code{:state}. Extension callbacks must return maps. Visit keys
 should have stable equality and hashing. These input contracts are not
 exhaustively validated at runtime.
+
+\secc Computational costs
+
+With deduplication enabled, for a~finite reachable graph with $V$ visit keys
+and $E$ examined transitions, DFS, BFS, and post-order traversal perform $O(V+E)$ graph
+bookkeeping. This treats hash-based lookup as effectively constant and
+excludes successor generation, state hashing, callback work, and output
+construction. Best-first uses a~keyed sorted queue, giving
+$O((V+E)\log V)$ queue work. Simple-path enumeration depends on the number
+of route prefixes, which may be exponential. Propagation also depends on
+how often a~state's value improves, not just on graph size.
+
+Callbacks can change these bounds. A~fold that collects children and
+rescans the whole vector on every step does quadratic work in a~node's degree.
+Use a~\code{:fold} for incremental summaries and only collect children
+explicitly when the computation needs them.
+Large set unions and arbitrary-precision arithmetic still cost what their
+domain operations require.
+
+Identity matters as much as the traversal: include information that affects
+future choices or results, but do not distinguish histories merely because
+they provide different witnesses. For trees with unique states,
+\code{:visit-key nil} avoids a~visited set in DFS and BFS.
+
+The library supplies traversal order, graph identity, reusable context, and
+stack-safe dependency evaluation; it does not remove their allocation
+costs. A~flat cumulative sum or first-match lookup needs no graph machinery.
+The worked examples include direct alternatives for such cases.
 
 \sec Technical documentation
 
@@ -999,8 +1032,13 @@ extension order.
 
 \secc Preparing a search
 
-The \code{search-options} helper resolves shared graph-search defaults once
-at the start of an algorithm. The space is called
+The \code{search-options} helper resolves shared graph-search defaults and
+configures a~visit-preparation function once at the start of an algorithm.
+A~default-decoded transition already has the base visit's exact shape and
+is reused before applying extensions. Custom decoders supply only the
+destination to a~new base visit; other edge fields are available to
+extensions but do not become visit context automatically.
+The space is called
 with the projected visit, and \code{:expand?} can make a visit a leaf without
 removing it from the results. Decoding then gives each raw successor a
 uniform transition-map shape. The local \code{map-lazy} helper delays its
@@ -1065,22 +1103,28 @@ control pruning without becoming part of the public visit.
 
 Post-order traversal cannot use the shared loop: a visit must be returned
 only after its successors have finished. Its explicit pending items represent
-entering a visit and resuming its parent. The local operations make those
-steps explicit: \code{enter} marks a visit known and schedules its
-continuation; \code{continue} records a completed child and schedules the
-next one; \code{finish} runs bottom-up callbacks and emits the visit.
-Pending frames form a sequence stack: each step prepends individual frames,
-with lazily initialized starts at its tail. No chunk frontier is needed.
-\code{known} stores the first visit for each key; \code{done} distinguishes
-completed nodes from nodes still active on the current path. When a child
-finishes, the parent records it in \code{:processed-successors}; that same vector is
-passed to \code{:next}, \code{:continue?}, and ultimately \code{:exit}. Checking
-\code{:continue?} before consuming the next transition lets the algorithm stop
-before decoding or visiting a remaining successor. A chunked source may
-nevertheless realize multiple raw successors as one is consumed.
-If \code{:continue?} rejects the first successor, the space and expansion
-callbacks are not called for that visit.
-Remaining successors are stored raw and decoded directly by \code{continue}
+entering a visit and resuming its parent. Compact vector frames store the
+operation, visit, identity key, accumulator, remaining successors, and
+optional awaited edge. An inner loop handles cached successors without
+allocating frames for them. Lazy boundaries are needed when yielding
+completed visits and descending into new children, not on every edge.
+Pending frames form a sequence stack, with lazily initialized starts at
+its tail. No chunk frontier is needed.
+\code{known} stores the first visit for each key and replaces it at
+completion. With a~fold, the reserved \code{:value} field distinguishes a~
+completed result from an active visit, including results of \code{nil} or
+\code{false}; no separate completion set is needed.
+When a child finishes, its parent's fold step incorporates the completed
+successor view into a~private accumulator. There is no implicit
+processed-child collection.
+The same state-only transition reuse applies here. Attributed transitions
+keep their edge fields in \code{:via}, not in the visit itself.
+A~\code{reduced} accumulator stops traversal before requesting another
+transition; \code{:finish} receives its unwrapped value.
+A~chunked source may nevertheless realize multiple raw successors as one
+is consumed. If initialization returns \code{reduced}, the space and
+expansion callbacks are not called for that visit.
+Remaining successors are stored raw and decoded directly by the loop
 after the pruning check, without an intermediate mapped sequence.
 
 \begingroup

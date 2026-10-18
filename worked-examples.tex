@@ -16,6 +16,9 @@
 \maketoc
 
 These worked problems can be read independently of the user guide.
+For explanations of the algorithms and API, see the
+\ulink[https://github.com/cao-/state-space/releases/latest/download/state-space.pdf]
+{State-space user guide}.
 
 To try the examples from the project directory, start a~REPL with
 \code{clojure -M}; the source directory is on the classpath. Load the library
@@ -29,6 +32,9 @@ Evaluate the examples in order in one REPL session.
 
 For each problem, pause after reading the question and work out a~state
 representation and an approach before continuing to the solution.
+Start with states and successors; add a~path, depth, or other route context
+only when the question needs it. Some examples include an ordinary Clojure
+solution to distinguish the domain computation from the traversal machinery.
 
 \sec Routes, distances, and alternatives
 
@@ -43,7 +49,9 @@ directed passages, in the order inspected from each room, are
 \code{:lobby -> :stairs}, \code{:lobby -> :gallery},
 \code{:stairs -> :landing}, \code{:landing -> :exit}, and
 \code{:gallery -> :exit}. Starting at \code{:lobby}, what route to
-\code{:exit} does depth-first search find first?
+\code{:exit} does
+\ulink[https://en.wikipedia.org/wiki/Depth-first_search]{depth-first search}
+find first?
 
 \smallskip
 \noindent{\bf Solution.} Represent each room as a~state and each passage as
@@ -77,8 +85,9 @@ route in each visit, then select the first exit visit:
 
 DFS takes the stairs branch first and returns a~three-passage route, even
 though the gallery gives a~shorter route. DFS answers which route it finds
-first, not which route is shortest. Change only the search operation to BFS
-to find the route with the fewest passages in the same building:
+first, not which route is shortest. Change only the search operation to
+\ulink[https://en.wikipedia.org/wiki/Breadth-first_search]{breadth-first search}
+(BFS) to find the route with the fewest passages in the same building:
 
 \begtt \hisyntax{clojure}
 (first (filter #(= :exit (:state %))
@@ -165,9 +174,10 @@ determines which of several shortest routes BFS returns first.
 \secc Find each cell's distance to the nearest zero
 
 \noindent{\bf Problem.} A~grid contains zeros and ones. For every cell,
-find its Manhattan distance to the nearest zero. For example, in
+find its Manhattan distance to the nearest zero: the fewest horizontal or
+vertical steps, with no blocked cells. For example, in
 \code{["000" "010" "111"]}, the middle cell in the second row is one step
-from a~zero, while the bottom-right cell is two steps from one.
+from a~zero, while the bottom-middle cell is two steps from one.
 
 \smallskip
 \noindent{\bf Solution.} Start one BFS from every zero at once. BFS visits
@@ -346,23 +356,15 @@ disconnected triangle cannot be missed:
   {:a [:b :d] :b [:a :c] :c [:b :d] :d [:a :c]
    :x [:y :z] :y [:x :z] :z [:x :y]})
 
-(def nodes (into (set (keys graph)) (mapcat identity (vals graph))))
-
-(def adjacent
-  (reduce (fn [g [from to]]
-            (-> g (update from conj to) (update to conj from)))
-          (zipmap nodes (repeat []))
-          (for [[from tos] graph, to tos] [from to])))
-
-(loop [uncoloured nodes]
+(loop [uncoloured (set (keys graph))]
   (if-let [root (first uncoloured)]
     (let [component
           (into {} (map (fn [{:keys [state depth]}]
                           [state (mod depth 2)]))
-                (ss/bfs adjacent [root]
+                (ss/bfs graph [root]
                             {:extensions [ss/depth-extension]}))]
       (if (some (fn [[node colour]]
-                  (some #(= colour (component %)) (adjacent node)))
+                  (some #(= colour (component %)) (graph node)))
                 component)
         false
         (recur (reduce disj uncoloured (keys component)))))
@@ -399,7 +401,7 @@ the index in the state tells us when all decisions have been made:
     [[(inc i) chosen]
      [(inc i) (conj chosen (items i))]]))
 
-(->> (ss/dfs subset-decisions [[0 []]])
+(->> (ss/dfs subset-decisions [[0 []]] {:visit-key nil})
      (map :state)
      (filter #(= (count items) (first %)))
      (map second))
@@ -409,10 +411,15 @@ the index in the state tells us when all decisions have been made:
 ;;     [:a :b] [:a :b :d] [:a :b :c] [:a :b :c :d])
 \endtt
 
+Each partial choice occurs only once in this tree, so
+\code{:visit-key nil} avoids keeping an unnecessary visited set.
+
 \secc Place eight queens without conflicts
 
-\noindent{\bf Problem.} Place eight queens on a~chessboard so that no two
-share a~row, column, or diagonal. How many solutions are there?
+\noindent{\bf Problem.} Place eight queens on a~chessboard
+so that no two share a~row, column, or diagonal. How many placements are
+there? Count rotations and reflections as separate placements when they
+occupy different squares.
 
 \smallskip
 \noindent{\bf Solution.} Place one queen per row. A~partial placement is a~
@@ -436,7 +443,7 @@ then explores only safe partial boards:
       (conj placed column))))
 
 (count (filter #(= 8 (count (:state %)))
-               (ss/dfs queen-placements [[]])))
+               (ss/dfs queen-placements [[]] {:visit-key nil})))
 ;; => 92
 \endtt
 
@@ -449,7 +456,7 @@ subtractions needed to reach zero?
 \smallskip
 \noindent{\bf Solution.} Use the remaining number as the state, with one
 successor for each legal square subtraction. BFS finds a~route with the
-fewest subtractions:
+fewest subtractions, reported by the depth extension:
 
 \begtt \hisyntax{clojure}
 (defn square-subtractions [remaining]
@@ -457,23 +464,23 @@ fewest subtractions:
     (- remaining (* root root))))
 
 (->> (ss/bfs square-subtractions [12]
-                 {:extensions [ss/path-extension]})
+                 {:extensions [ss/depth-extension]})
      (filter #(zero? (:state %)))
      first
-     :path)
-;; => [12 8 4 0]
+     :depth)
+;; => 3
 \endtt
 
-Each step subtracts a~square; the path therefore represents
-\code{12 = 4 + 4 + 4}.
+Three subtractions suffice: \code{12 = 4 + 4 + 4}.
 
 \secc Fewest moves across a~chessboard
 
-\noindent{\bf Problem.} A~knight starts at \code{[0 0]} on a~standard
-$8 \times 8$ chessboard whose squares are \code{[x y]} with coordinates
-from 0 through 7. A~knight moves two squares in one direction and one square
-perpendicular to that direction, staying on the board. What is the fewest
-moves needed to reach the opposite corner, \code{[7 7]}?
+\noindent{\bf Problem.} A~knight\fnote{A~knight moves two squares in one
+direction and one square perpendicular to it, staying on the board.}
+starts at \code{[0 0]} on a~chessboard
+whose squares are \code{[x y]} with coordinates from 0 through 7.
+What is the fewest moves needed to reach the opposite corner,
+\code{[7 7]}?
 
 \smallskip
 \noindent{\bf Solution.} Treat each square as a~state. Generate the legal
@@ -506,7 +513,7 @@ needed to leave exactly four litres in the five-litre jug?
 \smallskip
 \noindent{\bf Solution.} Represent a~state as the amount of water in both
 jugs. Each allowed action creates a~successor state. BFS finds a~solution
-with the fewest actions, and the path extension shows the states along it:
+with the fewest actions:
 
 \begtt \hisyntax{clojure}
 (defn jug-moves [[a b]]
@@ -518,11 +525,11 @@ with the fewest actions, and the path extension shows the states along it:
      [(+ a pour-ba) (- b pour-ba)]]))
 
 (->> (ss/bfs jug-moves [[0 0]]
-                 {:extensions [ss/path-extension]})
+                 {:extensions [ss/depth-extension]})
      (filter (fn [{[_ b] :state}] (= 4 b)))
      first
-     :path)
-;; => [[0 0] [0 5] [3 2] [0 2] [2 0] [2 5] [3 4]]
+     :depth)
+;; => 6
 \endtt
 
 The full state matters: the same amount in one jug can lead to different
@@ -531,8 +538,9 @@ future moves depending on the other jug's contents.
 \secc Help the missionaries and cannibals cross
 
 \noindent{\bf Problem.} Three missionaries and three cannibals are on one
-bank of a~river. A~boat carries one or two people. Whenever missionaries
-are present on a~bank, they must not be outnumbered by cannibals. What is
+bank of a~river, with the boat on that bank. The boat carries one or two
+people. Whenever missionaries are present on a~bank, they must not be
+outnumbered by cannibals. What is
 the fewest crossings that take everyone to the opposite bank?
 
 \smallskip
@@ -617,8 +625,8 @@ generates legal turns only for combinations it explores.
 \code{1} through \code{5} and one blank, represented by \code{0}. Represent
 the board as a~vector in row-major order. The blank may swap places with a~
 tile directly above, below, left, or right of it, provided that position is
-on the board. Starting from \code{[4 1 3 0 2 5]}, find the fewest swaps
-that produce \code{[1 2 3 4 5 0]}.
+on the board. Starting from \code{[4 1 3 0 2 5]}, find a~shortest sequence
+of boards ending at \code{[1 2 3 4 5 0]}.
 
 \smallskip
 \noindent{\bf Solution.} A~state is the whole board; generate successors by swapping the
@@ -658,8 +666,11 @@ in separate containers.
 
 \noindent{\bf Problem.} In the small warehouse below, move the box marked
 \code{\$} onto the goal marked \code{.}. The player may walk through empty
-cells and push the box, but cannot move through walls or pull the box. What
-is the fewest player moves?
+cells and push the box, but cannot move through walls or pull the box.
+\code{@} marks the player, \code{\#} marks a~wall, and spaces are empty
+floor. Each move goes one cell horizontally or vertically; pushing moves
+the box one cell in the same direction and counts as one player move.
+What is the fewest player moves?
 
 \begtt
 #######
@@ -710,9 +721,12 @@ check distinguish configurations with the box in different places.
 \secc Plan around the Sussman anomaly
 
 \noindent{\bf Problem.} Three blocks are arranged in two stacks, with the
-bottom block first: \code{[:a :c]} and \code{[:b]}. Move one clear block at
-a~time, either onto the table or onto another clear block, until the stack
-\code{[:c :b :a]} is built. What is the fewest moves?
+bottom block first: \code{[:a :c]} and \code{[:b]}. A~block is clear when
+no other block is on top of it. Move one clear block at a~time, either onto
+the table or onto another clear block, until the stack
+\code{[:c :b :a]} is built. Find a~plan with the fewest moves.
+This blocks-world planning problem is known as the
+\ulink[https://en.wikipedia.org/wiki/Sussman_anomaly]{Sussman anomaly}.
 
 \smallskip
 \noindent{\bf Solution.} Represent a~world as a~set of stacks. A~move
@@ -846,9 +860,27 @@ combined with resource and collection progress.
 
 \secc Check mutual exclusion across process interleavings
 
-\noindent{\bf Problem.} Two processes use Peterson's mutual-exclusion
-protocol. Can both enter their critical sections at once? What shortest
-counterexample appears if the waiting condition is removed?
+\noindent{\bf Problem.} Two processes, numbered 0 and 1, use
+\ulink[https://en.wikipedia.org/wiki/Peterson's_algorithm]
+{Peterson's mutual-exclusion protocol}. They share two request flags, initially false,
+and a~\code{turn} variable, initially 0. Each process repeatedly follows
+these instructions, where \code{i} is its own number and \code{j} is the
+other process's number:
+
+\begitems
+* 0: Set \code{flag[i]} to true.
+* 1: Set \code{turn} to \code{j}.
+* 2: Wait while \code{flag[j]} is true and \code{turn = j}; otherwise
+  enter the critical section at instruction 3.
+* 3: Leave the critical section and advance to instruction 4.
+* 4: Set \code{flag[i]} to false and return to instruction 0.
+\enditems
+
+Both processes start at instruction 0. At each step, either process
+executes one instruction atomically; its writes are immediately visible
+to the other process, and instructions are not reordered. Can both be at
+instruction 3 at once? Find a~shortest trace reaching that state if
+instruction 2 instead enters unconditionally.
 
 \smallskip
 \noindent{\bf Solution.} A~state records each process's control location,
@@ -863,13 +895,14 @@ shortest trace when the waiting condition is broken:
 (defn process-steps [wait?]
   (fn [{:keys [turn] :as system}]
     (for [i [0 1]
-          :let [j (- 1 i)]]
-      (case (get-in system [:pc i])
+          :let [j (- 1 i)
+                pc (get-in system [:pc i])]
+          :when (not (and (= pc 2) wait?
+                          (get-in system [:flag j]) (= turn j)))]
+      (case pc
         0 (-> system (assoc-in [:flag i] true) (assoc-in [:pc i] 1))
         1 (-> system (assoc :turn j) (assoc-in [:pc i] 2))
-        2 (if (and wait? (get-in system [:flag j]) (= turn j))
-            system
-            (assoc-in system [:pc i] 3))
+        2 (assoc-in system [:pc i] 3)
         3 (assoc-in system [:pc i] 4)
         4 (-> system (assoc-in [:flag i] false)
               (assoc-in [:pc i] 0))))))
@@ -877,8 +910,8 @@ shortest trace when the waiting condition is broken:
 (defn violation [wait?]
   (first (filter #(= [3 3] (get-in % [:state :pc]))
                  (ss/bfs (process-steps wait?) [initial-system]
-                             {:extensions [ss/depth-extension
-                                           ss/path-extension]}))))
+                         {:extensions [ss/depth-extension
+                                       ss/path-extension]}))))
 
 (let [counterexample (violation false)]
   [(nil? (violation true))
@@ -931,8 +964,9 @@ uses the accumulated distance to return the least-cost route:
 \endtt
 
 Unlike BFS, best-first minimizes the sum of edge costs, not the number of
-edges. Its default distance priority is Dijkstra's algorithm when edge
-weights are non-negative.
+edges. Its default distance priority is
+\ulink[https://en.wikipedia.org/wiki/Dijkstra's_algorithm]{Dijkstra's algorithm}
+when edge weights are non-negative.
 
 \secc Keep the details of each leg
 
@@ -984,9 +1018,15 @@ The trail preserves edge data that a~state-only path would lose.
 \secc Two travelers meet as quickly as possible
 
 \noindent{\bf Problem.} Two travelers start in \code{:west} and
-\code{:east}. On each turn, both must move along one road. A~turn lasts as
+\code{:east}. The only roads are undirected, with travel times
+\code{:west-:ridge} (2), \code{:ridge-:town} (2),
+\code{:ridge-:bridge} (5), \code{:east-:market} (1),
+\code{:market-:town} (2), and \code{:market-:bridge} (4).
+On each turn, both must move along one road. A~turn lasts as
 long as the slower traveler takes to reach the next city; the faster traveler
-waits. Find the minimum elapsed time until they are in the same city.
+waits before the next turn begins. Meetings count only at the end of
+a~turn, not while passing along a~road. Find the minimum elapsed time until
+they are in the same city.
 
 \smallskip
 \noindent{\bf Solution.} A~state is the pair of current cities. Each
@@ -1012,14 +1052,12 @@ each traveler independently:
 
 (->> (ss/best-first simultaneous-moves
                         [[:west :east]]
-                        {:decode-edge identity
-                         :extensions [ss/path-extension]})
+                        {:decode-edge identity})
      (filter (fn [{[city-a city-b] :state}]
                (= city-a city-b)))
-     first)
-;; => {:state [:town :town]
-;;     :path [[:west :east] [:ridge :market] [:town :town]]
-;;     :distance 4}
+     first
+     :distance)
+;; => 4
 \endtt
 
 The two road times are not added within a~turn: one traveler waits for the
@@ -1029,9 +1067,22 @@ edge cost makes the ordinary weighted search objective match the problem.
 \secc Make a~short presentation covering required topics
 
 \noindent{\bf Problem.} A~short presentation must cover \code{:welcome},
-\code{:robots}, and \code{:navigation}. Available clips have a~duration and
-cover one or more topics. Find a~presentation with minimum total duration.
-This is a~small set-cover search.
+\code{:robots}, and \code{:navigation}. The available clips are:
+
+\begitems
+* \code{:short-welcome}: 2~minutes, covering \code{:welcome}.
+* \code{:robot-navigation}: 5~minutes, covering \code{:robots} and
+  \code{:navigation}.
+* \code{:robot-basics}: 4~minutes, covering \code{:robots}.
+* \code{:navigation-demo}: 2~minutes, covering \code{:navigation}.
+* \code{:full-introduction}: 8~minutes, covering \code{:welcome} and
+  \code{:robots}.
+\enditems
+
+Choose clips to play in full, each at most once, so that every required
+topic is covered. Their order does not affect coverage or total duration.
+Find a~presentation with minimum total duration. This is a~small weighted
+\ulink[https://en.wikipedia.org/wiki/Set_cover_problem]{set-cover problem}.
 
 \smallskip
 \noindent{\bf Solution.} A~state records the topics still to cover and the
@@ -1061,7 +1112,8 @@ so best-first returns the least-duration complete presentation:
                  (ss/best-first
                   add-clip
                   [{:remaining required-topics :selected []}]
-                  {:decode-edge identity}))))
+                  {:decode-edge identity
+                   :visit-key #(get-in % [:state :remaining])}))))
 
 presentation
 ;; => {:state {:remaining #{}
@@ -1073,17 +1125,25 @@ The selected topic makes the branching finite and ensures that every chosen
 clip covers at least one outstanding requirement. Best-first compares total
 duration, rather than clip count; here one multi-topic clip makes the
 seven-minute solution shorter than choosing separate clips for each topic.
+The visit key uses only the remaining topics: different clip histories
+with the same outstanding requirements have the same future choices.
+Keep the selected clips as a~witness without treating each history as a~new
+subproblem. A~chosen clip covers no remaining topic afterward, so it cannot
+be selected again.
 
 \secc Grow a~minimum spanning tree
 
 \noindent{\bf Problem.} Connect four towns using the least total road length.
 The undirected roads have lengths \code{:a-:b} (1), \code{:a-:c} (4),
 \code{:b-:c} (2), \code{:b-:d} (5), and \code{:c-:d} (1). Which roads
-belong to a~minimum spanning tree, and what is their total length?
+connect all four towns without cycles with the least total length
+(a~minimum spanning tree), and what is that length?
 
 \smallskip
-\noindent{\bf Solution.} Prim's algorithm repeatedly chooses the lightest
-edge leaving the already reached towns. Give each visit the weight of the
+\noindent{\bf Solution.}
+\ulink[https://en.wikipedia.org/wiki/Prim's_algorithm]{Prim's algorithm}
+repeatedly chooses the lightest edge leaving the already reached towns.
+Give each visit the weight of the
 edge that joins it, and use that value as best-first's priority. This is
 not Dijkstra's algorithm: the priority is the joining edge, not the
 cumulative distance from the start. The custom extension's \code{:start}
@@ -1157,11 +1217,12 @@ the next transition's climb:
 
 (->> (ss/best-first grid-climbs [[0 0]]
                         {:decode-edge identity
-                         :extensions [effort-extension]
+                         :extensions [effort-extension ss/path-extension]
                          :priority :effort})
      (filter #(= [2 2] (:state %)))
      first)
-;; => {:state [2 2], :effort 2}
+;; => {:state [2 2], :effort 2,
+;;     :path [[0 0] [1 0] [2 0] [2 1] [2 2]]}
 \endtt
 
 Along any route, adding a~climb can never lower its maximum, so this
@@ -1178,7 +1239,8 @@ respectively. There are no other routes. The estimated remaining times are
 
 \smallskip
 \noindent{\bf Solution.} Best-first can prioritize each visit by the time
-already travelled plus the estimated time remaining. This is A* search; the
+already travelled plus the estimated time remaining. This is
+\ulink[https://en.wikipedia.org/wiki/A*_search_algorithm]{A* search}; the
 estimates here are consistent, so the first settled goal has minimum travel
 time:
 
@@ -1223,10 +1285,12 @@ part of the state itself.
 \secc[scheduled-connection] Catch a~scheduled connection
 
 \noindent{\bf Problem.} A~traveler leaves \code{:home} at 8:00. A~bus
-reaches \code{:junction} at 8:10 and another reaches \code{:museum} directly
-at 8:25. From the junction, a~bus leaves at 8:15 and reaches the museum at
-8:20. Find the earliest arrival. A~connection can be used only if the
-traveler reaches its departure stop in time.
+departs home at 8:00 and reaches \code{:junction} at 8:10; another departs
+home at 8:00 and reaches \code{:museum} directly at 8:25. From the
+junction, a~bus leaves at 8:15 and reaches the museum at 8:20. These are
+the only trips. Find the earliest arrival at the museum. Waiting at stops
+is allowed, and a~connection can be used if the traveler reaches its
+departure stop no later than its departure time.
 
 \smallskip
 \noindent{\bf Solution.} Store departure and arrival times relative to 8:00.
@@ -1249,11 +1313,11 @@ accumulated Dijkstra distance is the arrival time:
 (->> (ss/best-first catchable-trips [:home]
                         {:project identity
                          :decode-edge (fn [[state weight]]
-                                        {:state state :weight weight})
-                         :extensions [ss/path-extension]})
+                                        {:state state :weight weight})})
      (filter #(= :museum (:state %)))
-     first)
-;; => {:state :museum, :path [:home :junction :museum], :distance 20}
+     first
+     :distance)
+;; => 20
 \endtt
 
 The scheduled edges are search-aware: whether a~trip is a~successor depends
@@ -1261,9 +1325,9 @@ on the current arrival time in \code{:distance}. The default
 \code{:visit-key} remains \code{:state}; for a~timetable where earlier arrival
 always leaves at least as many future options, a~later visit to the same stop
 is dominated. A~static stop-to-stop graph cannot directly express which
-departures are still catchable; without search-aware generation, the time
-would need to be encoded into states or represented with a~time-expanded
-graph.
+departures are still catchable. A~direct solver can make the same decision
+using its distance map. A~time-expanded
+graph is another possible representation, not a~requirement.
 
 \secc Reach the goal with limited fuel
 
@@ -1276,10 +1340,9 @@ Can it reach \code{:goal} without any move using more fuel than remains?
 Arriving with zero fuel is allowed.
 
 \smallskip
-\noindent{\bf Solution.} Fuel remaining affects which routes are possible,
-so the space function needs the full visit, not only its location. Track
-fuel with an extension and include it in \code{:visit-key}: arriving at the
-same junction with different fuel is a~different search position.
+\noindent{\bf Solution.} Use the pair of location and remaining fuel as
+the state. Arriving at the same junction with different fuel is a~different
+search position, since it changes which onward routes are possible.
 
 \begtt \hisyntax{clojure}
 (def fuel-routes
@@ -1288,30 +1351,21 @@ same junction with different fuel is a~different search position.
    :junction [[:goal 3]]
    :goal []})
 
-(def fuel-left
-  (ss/accumulate :fuel-left (constantly 5)
-                     (fn [fuel transition]
-                       (- fuel (:fuel-used transition)))))
+(defn affordable-routes [[location fuel]]
+  (for [[destination used] (fuel-routes location)
+        :when (<= used fuel)]
+    [destination (- fuel used)]))
 
-(defn affordable-routes [{:keys [state fuel-left]}]
-  (filter (fn [[_ fuel-used]] (<= fuel-used fuel-left))
-          (fuel-routes state)))
-
-(->> (ss/bfs affordable-routes [:home]
-                 {:project identity
-                  :visit-key (juxt :state :fuel-left)
-                  :decode-edge (fn [[state fuel-used]]
-                                 {:state state :fuel-used fuel-used})
-                  :extensions [fuel-left ss/path-extension]})
-     (filter #(= :goal (:state %)))
-     first)
-;; => {:state :goal, :path [:home :detour :junction :goal], :fuel-left 0}
+(boolean
+ (some #(= :goal (first (:state %)))
+       (ss/bfs affordable-routes [[:home 5]])))
+;; => true
 \endtt
 
 The direct arrival at \code{:junction} leaves too little fuel to continue.
 If visits were identified only by location, BFS would discard the later
-arrival with enough fuel. Including \code{:fuel-left} in \code{:visit-key}
-preserves both possibilities.
+arrival with enough fuel. The default visit key uses the entire pair,
+preserving both possibilities without additional callbacks.
 
 \secc Find a~route matching a~label pattern
 
@@ -1326,7 +1380,9 @@ one or more repetitions of the pattern \code{ab}.
 
 \smallskip
 \noindent{\bf Solution.} Carry both the current graph node and the state
-of a~small finite automaton in the search state. The automaton accepts after
+of a~small
+\ulink[https://en.wikipedia.org/wiki/Finite-state_machine]{finite automaton}
+in the search state. The automaton accepts after
 a~\code{b} follows an \code{a}; from that accepting state, another \code{a}
 can begin the next repetition. Thus ordinary BFS explores the product of the
 graph and the pattern recognizer, while the default visit identity keeps
@@ -1356,8 +1412,9 @@ distinct automaton states at the same graph node separate:
                               :extensions [ss/trail-extension]})
                 (filter #(= [:target :accept] (:state %)))
                 first)]
-  (mapv :label (rest (:trail route))))
-;; => ["a" "b"]
+  {:route (mapv (comp first :state) (:trail route))
+   :labels (mapv :label (rest (:trail route)))})
+;; => {:route [:start :middle :target], :labels ["a" "b"]}
 \endtt
 
 \sec Computing after successors
@@ -1403,28 +1460,22 @@ links, including the task itself. The shared \code{:parse} task should only
 be counted once for \code{:app}.
 
 \smallskip
-\noindent{\bf Solution.} A~post-order \code{:exit} callback runs after a~
-task's prerequisites have been processed. Carry the set of prerequisite
-tasks already counted, union the sets from completed successors, then count
-the resulting set. The callback receives the current visit and its completed
-successor visits, and returns fields to add to the current visit:
+\noindent{\bf Solution.} Initialize each task's fold with the task itself,
+then union in the sets from its prerequisites. The completed set is the
+visit's \code{:value}; count it when displaying the answer:
 
 \begtt \hisyntax{clojure}
 (def task-count
-  {:exit (fn [{:keys [state]} prerequisites]
-           (let [included (into #{}
-                                (mapcat #(conj (:included %) (:state %)))
-                                prerequisites)]
-             {:included (conj included state)
-              :size (inc (count included))}))})
+  {:init (fn [{:keys [state]}] #{state})
+   :step (fn [included child] (into included (:value child)))})
 
-(mapv (juxt :state :size)
+(mapv (juxt :state (comp count :value))
       (ss/postorder {:app [:compile :docs]
                            :compile [:parse]
                            :docs [:parse]
                            :parse []}
                           [:app]
-                          {:extensions [task-count]}))
+                          {:fold task-count}))
 ;; => [[:parse 1] [:compile 2] [:docs 2] [:app 4]]
 \endtt
 
@@ -1442,32 +1493,59 @@ segmentations are possible?
 \smallskip
 \noindent{\bf Solution.} Use the character offset as a~state. Each
 dictionary word that starts at that offset leads to the offset just after
-it, so every transition moves forward. A~post-order \code{:exit} callback
-can count the segmentations from an offset using the already-counted
-successors:
+it, so every transition moves forward. Initialize the end offset with one
+completed segmentation and all others with zero. A~fold
+adds the already-counted suffixes:
 
 \begtt \hisyntax{clojure}
 (def text "catsanddog")
 (def dictionary #{"cat" "cats" "and" "sand" "dog"})
+(def longest-word (apply max (map count dictionary)))
 
 (defn next-cuts [start]
-  (for [end (range (inc start) (inc (count text)))
+  (for [end (range (inc start)
+                   (inc (min (count text) (+ start longest-word))))
         :when (contains? dictionary (subs text start end))]
     end))
 
 (def count-ways
-  {:exit (fn [{start :state} suffixes]
-           {:ways (if (= start (count text))
-                    1
-                    (transduce (map :ways) + 0 suffixes))})})
+  {:init (fn [{start :state}] (if (= start (count text)) 1N 0N))
+   :step (fn [ways suffix] (+' ways (:value suffix)))})
 
-(:ways (last (ss/postorder next-cuts [0]
-                                 {:extensions [count-ways]})))
-;; => 2
+(:value (last (ss/postorder next-cuts [0] {:fold count-ways})))
+;; => 2N
 \endtt
 
 Each split point is counted once, while distinct choices of the first word
 contribute separate ways to the total.
+Successor generation checks no farther than the longest dictionary word.
+The fold handles each examined edge once without collecting successor views;
+\code{+'} allows counts to grow beyond fixed-width integers.
+
+\smallskip
+\noindent{\bf Direct alternative.} For this problem, ordinary dynamic
+programming expresses the recurrence without a~traversal.
+Reuse \code{next-cuts} and count suffixes from right to left:
+
+\begtt \hisyntax{clojure}
+(let [ways (reduce
+            (fn [counts start]
+              (assoc counts start
+                     (reduce +' 0N (map counts (next-cuts start)))))
+            {(count text) 1N}
+            (range (dec (count text)) -1 -1))]
+  (ways 0))
+;; => 2N
+\endtt
+
+Both versions avoid recursive stack growth and reuse suffix counts.
+The direct version processes every offset in a~known order;
+\code{postorder} discovers that order from the successor relation and
+computes only offsets reachable from the start. Direct demand-driven
+memoization can also skip unreachable offsets; the library supplies the
+stack-safe traversal and result cache.
+Neither version can return the total without computing the suffix counts
+it needs.
 
 \secc Count the shortest routes
 
@@ -1483,7 +1561,7 @@ different routes with the fewest edges lead from \code{:a} to \code{:e}?
 \noindent{\bf Solution.} First use BFS to find each state's minimum depth.
 Keep only edges that advance exactly one depth level; these edges form a~
 directed acyclic graph containing all shortest routes. A~post-order
-\code{:exit} callback counts the routes from each state to the goal:
+fold counts the routes from each state to the goal:
 
 \begtt \hisyntax{clojure}
 (def route-graph
@@ -1506,19 +1584,19 @@ directed acyclic graph containing all shortest routes. A~post-order
           (route-graph state)))
 
 (->> (ss/postorder shortest-edges [:a]
-                         {:extensions
-                          [{:exit (fn [{:keys [state]} successors]
-                                    {:count (if (= state :e)
-                                              1
-                                              (transduce (map :count) + 0
-                                                         successors))})}]})
+                  {:fold
+                   {:init (fn [{:keys [state]}] (if (= state :e) 1N 0N))
+                    :step (fn [n child] (+' n (:value child)))}})
      last
-     :count)
-;; => 2
+     :value)
+;; => 2N
 \endtt
 
 The two shortest routes share their final edge from \code{:d} to
 \code{:e}; the bottom-up count includes both ways of reaching \code{:d}.
+A~specialized BFS can update distances and route counts together in one
+pass. This version separates the two recurrences; both examine a~linear
+number of vertices and edges, apart from count arithmetic.
 
 \secc Find a~least-cost route with a~negative edge
 
@@ -1541,16 +1619,13 @@ decoded incoming edge supplies its weight:
    :t []})
 
 (def route-cost
-  {:exit (fn [{:keys [state]} successors]
-           {:cost (if (= state :t)
-                    0
-                    (apply min
-                           (map #(+ (:weight (:via %)) (:cost %))
-                                successors)))})})
+  {:init (fn [{:keys [state]}] (if (= state :t) 0 ##Inf))
+   :step (fn [cost child]
+           (min cost (+ (:weight (:via child)) (:value child))))})
 
-(:cost (last (ss/postorder dag [:s]
+(:value (last (ss/postorder dag [:s]
                                  {:decode-edge identity
-                                  :extensions [route-cost]})))
+                                  :fold route-cost})))
 ;; => -2
 \endtt
 
@@ -1561,16 +1636,18 @@ library's API.
 
 \secc Find the value of tic-tac-toe under perfect play
 
-\noindent{\bf Problem.} Two players take turns marking an empty square on a~
-three-by-three board, with \code{:x} moving first. The first player to
-complete a~row, column, or diagonal wins; if the board fills first, the game
-is a~draw. Assuming both players choose optimally, what is the game's value
-for \code{:x}, where a~win is 1, a~loss is -1, and a~draw is 0?
+\noindent{\bf Problem.} Two players play tic-tac-toe\fnote{Players take
+turns marking an empty square on a~three-by-three board. The first to
+complete a~row, column, or diagonal wins; a~full board without a~winner
+is a~draw.} on an initially empty board, with \code{:x} moving first and
+\code{:o} second. Assuming both
+players choose optimally, what is the game's value for \code{:x}, where
+a~win is 1, a~loss is -1, and a~draw is 0?
 
 \smallskip
 \noindent{\bf Solution.} Each board is a~state and each legal move adds one
-mark, so the game graph is acyclic. An \code{:exit} callback evaluates each
-board after its children: \code{:x} chooses the largest child value and
+mark, so the game graph is acyclic. A~fold evaluates each
+board using its children: \code{:x} chooses the largest child value and
 \code{:o} chooses the smallest. Terminal boards receive their value directly:
 
 \begtt \hisyntax{clojure}
@@ -1593,39 +1670,40 @@ board after its children: \code{:x} chooses the largest child value and
         (assoc board i mark)))))
 
 (def game-value
-  {:exit (fn [{board :state} children]
-           (let [winner (board-winner board)]
-             {:value (cond
-                       (= :x winner) 1
-                       (= :o winner) -1
-                       (empty? children) 0
-                       (even? (count (remove nil? board)))
-                       (apply max (map :value children))
-                       :else (apply min (map :value children)))}))})
+  {:init (fn [{board :state}]
+           {:choose (if (even? (count (remove nil? board))) max min)
+            :score (case (board-winner board) :x 1 :o -1 nil)})
+   :step (fn [{:keys [choose score] :as result} child]
+           (assoc result :score
+                  (if (nil? score)
+                    (:value child)
+                    (choose score (:value child)))))
+   :finish (fn [{:keys [score]}] (or score 0))})
 
 (let [positions (ss/postorder legal-moves
                                     [(vec (repeat 9 nil))]
-                                    {:extensions [game-value]})]
+                                    {:fold game-value})]
   [(count positions) (:value (last positions))])
 ;; => [5478 0]
 \endtt
 
 The empty board's value is zero: optimal play from both sides leads to a~
 draw. The same bottom-up traversal used for dependency computations can
-therefore evaluate a~game tree by minimax.
+therefore evaluate a~game tree by
+\ulink[https://en.wikipedia.org/wiki/Minimax]{minimax}.
 
 \secc Schedule ordered preparation steps
 
 \noindent{\bf Problem.} A~lunch needs three preparation steps: chop
 vegetables (4~minutes), mix dressing (3~minutes), and plate the food
-(2~minutes). They use one work surface, so they must be done in that order.
-At what minute does each step begin?
+(2~minutes). They must be done in that order on one work surface, with no
+overlap or breaks. Starting at minute zero, at what minute does each step
+begin?
 
 \smallskip
-\noindent{\bf Solution.} Treat the lunch as depending on its preparation
-steps in work order. A~post-order \code{:next} callback sees the completed
-earlier steps in the parent's \code{:processed-successors} field, so it can set the next
-step's start time to their total duration:
+\noindent{\bf Solution.} This is a~fixed sequence, not a~graph computation.
+Use \code{reductions} to obtain each prefix sum and pair it with the next
+step. No search API is needed:
 
 \begtt \hisyntax{clojure}
 (def prep-minutes
@@ -1633,64 +1711,69 @@ step's start time to their total duration:
    :mix-dressing 3
    :plate-food 2})
 
-(def prep-schedule
-  {:next (fn [parent _transition _visit]
-           {:starts-at (reduce + 0
-                               (map #(prep-minutes (:state %))
-                                    (:processed-successors parent)))})})
-
-(->> (ss/postorder {:lunch [:chop-vegetables
-                                  :mix-dressing
-                                  :plate-food]
-                          :chop-vegetables []
-                          :mix-dressing []
-                          :plate-food []}
-                         [:lunch]
-                         {:extensions [prep-schedule]})
-     (filter #(contains? % :starts-at)))
+(let [steps [:chop-vegetables :mix-dressing :plate-food]]
+  (map (fn [step starts-at]
+         {:state step :starts-at starts-at})
+       steps
+       (reductions + 0 (map prep-minutes steps))))
 ;; => ({:state :chop-vegetables :starts-at 0}
 ;;     {:state :mix-dressing :starts-at 4}
 ;;     {:state :plate-food :starts-at 7})
 \endtt
 
-The callback uses results from earlier siblings to initialize each next
-visit. The order matters here because the steps share one work surface.
+This produces the schedule lazily and adds each duration once. A~dependency
+traversal becomes useful when steps have shared prerequisites to evaluate,
+not merely because the steps have a~fixed order.
 
 \secc Restore from the first available copy
 
 \noindent{\bf Problem.} A~document can be restored from a~local copy or,
-if that is missing, from a~slower network copy. Check the local copy first.
-Which source is used, and can the network lookup be skipped when the local
-copy is available?
+if that is missing, from a~slower network copy. In this case the local copy
+is available. Check it first and use the network only as a~fallback.
+Which source is used, and can the network lookup be skipped?
 
 \smallskip
 \noindent{\bf Solution.} Give the preferred source first in the successor
-order. Each source reports whether it is available; \code{:continue?} lets the
-restore visit stop requesting successors once a~completed source succeeds:
+order. Each available source returns its name as its value; the restore
+fold uses \code{reduced} to stop once a~completed source succeeds:
 
 \begtt \hisyntax{clojure}
 (def available-copies #{:local-copy})
 
-(def restore-extension
-  {:continue? (fn [{:keys [state]} processed]
-            (or (not= state :restore)
-                (not-any? :available? processed)))
-   :exit (fn [{:keys [state]} successors]
-           (if (= state :restore)
-             {:source (:state (some #(when (:available? %) %) successors))}
-             {:available? (contains? available-copies state)}))})
+(def restore-fold
+  {:init (fn [{:keys [state]}]
+           (when (contains? available-copies state) state))
+   :step (fn [source child]
+           (if-let [available (:value child)]
+             (reduced available)
+             source))})
 
 (ss/postorder {:restore [:local-copy :network-copy]
                :local-copy []
                :network-copy []}
               [:restore]
-              {:extensions [restore-extension]})
-;; => ({:state :local-copy, :available? true}
-;;     {:state :restore, :source :local-copy})
+              {:fold restore-fold})
+;; => ({:state :local-copy, :value :local-copy}
+;;     {:state :restore, :value :local-copy})
 \endtt
 
 The network-copy visit is absent because the local copy succeeded. If it
 were unavailable, traversal would continue to the network copy.
+
+\smallskip
+\noindent{\bf Direct alternative.} For a~flat list of sources, ordinary
+short-circuit selection is clearer:
+
+\begtt \hisyntax{clojure}
+(some #(when (contains? available-copies %) %)
+      [:local-copy :network-copy])
+;; => :local-copy
+\endtt
+
+\code{some} stops at the first available source, so short-circuiting is
+not an advantage unique to \code{postorder}. The traversal version
+demonstrates a~short-circuit fold, which is useful when determining a~source's
+availability itself requires processing successors.
 
 \secc Find the edge that closes a~dependency cycle
 
@@ -1701,25 +1784,24 @@ whether it points back to a~task that is still being explored.
 
 \smallskip
 \noindent{\bf Solution.} Post-order traversal terminates even when the
-graph has cycles. Its \code{:exit} callback receives each successor's
+graph has cycles. Its fold receives each successor's
 \code{decoded} incoming edge and a~\code{:back-edge} flag, which identifies an
 edge to a~task still being explored:
 
 \begtt \hisyntax{clojure}
 (def edge-report
-  {:exit (fn [_visit successors]
-           {:edges (mapv (fn [{:keys [state via back-edge]}]
-                           [state (:kind via) back-edge])
-                         successors)})})
+  {:init (constantly [])
+   :step (fn [edges {:keys [state via back-edge]}]
+           (conj edges [state (:kind via) back-edge]))})
 
 (ss/postorder {:api [[:database :requires]]
                :database [[:api :requires]]}
               [:api]
               {:decode-edge (fn [[state kind]]
                               {:state state :kind kind})
-               :extensions [edge-report]})
-;; => ({:state :database :edges [[:api :requires true]]}
-;;     {:state :api :edges [[:database :requires false]]})
+               :fold edge-report})
+;; => ({:state :database :value [[:api :requires true]]}
+;;     {:state :api :value [[:database :requires false]]})
 \endtt
 
 The edge from \code{:database} back to \code{:api} closes the cycle. The
@@ -1737,6 +1819,9 @@ when a~loop brings new information.
 \noindent{\bf Problem.} A~storefront depends on a~catalog API and an account
 API. The catalog API depends on a~database that provides \code{:sql}; the
 account API depends on an identity provider that provides \code{:oauth}.
+These are the only dependencies and directly provided capabilities.
+A~service inherits all capabilities of its dependencies, including
+indirect ones.
 Which capabilities are required by each service, including the storefront?
 
 \smallskip
@@ -1783,11 +1868,21 @@ inherits from its dependencies.
 
 \secc Analyze definitions around a~loop
 
-\noindent{\bf Problem.} A~program has an entry block, a~loop header, a~loop
-body, and an exit. The entry assigns to \code{x}; the body assigns to
-\code{x} again before returning to the header. At each block, determine
-which assignments to \code{x} may reach it. A~definition is a~pair of a~
-variable and its assignment label.
+\noindent{\bf Problem.} A~program has four blocks and only these
+control-flow edges: \code{:entry -> :header}, \code{:header -> :body},
+\code{:header -> :exit}, and \code{:body -> :header}. The entry assigns to
+\code{x}, labeled \code{:initial}; the body assigns to \code{x} again,
+labeled \code{:loop}. The header and exit make no assignments, and no
+definitions reach the entry.
+
+A~definition is a~pair of a~variable and its assignment label, such as
+\code{[:x :initial]}. An assignment replaces any earlier definition of the
+same variable on that execution path. At each block, determine which
+definitions may be present immediately before its instructions run,
+considering all paths from the entry, including repeated loop iterations.
+This is
+\ulink[https://en.wikipedia.org/wiki/Reaching_definition]{reaching definitions
+analysis}.
 
 \smallskip
 \noindent{\bf Try it.} Start with no definitions at the entry. At each
