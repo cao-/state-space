@@ -682,8 +682,10 @@ label, and the child visit supplies fields computed by earlier extensions.
 Reversing the extension order would make \code{:depth} unavailable to
 \code{leg-extension} at that stage. Callbacks run while candidate visits
 are prepared, before duplicate detection; they can run for an arrival that
-is ultimately skipped. Prefer pure callbacks rather than using them as
-notifications of emitted visits.
+is ultimately skipped, including a~repeated start or a~path repeat rejected
+by \code{simple-paths}. Prefer pure callbacks rather than using them as
+notifications of emitted visits; perform actions on returned visits while
+consuming the result sequence instead.
 
 For the common case of carrying a~single value, \code{accumulate} builds
 the \code{:start}/\code{:next} callbacks for you.

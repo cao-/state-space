@@ -607,6 +607,35 @@
                             [:a]
                             {:extensions [steps-extension]}))))))
 
+(deftest start-callbacks-run-before-duplicate-start-rejection
+  (doseq [algorithm [search/dfs search/bfs search/postorder search/best-first]]
+    (let [initialized (atom [])
+          visits (vec (algorithm {} [:root :root]
+                                 {:extensions
+                                  [{:start (fn [visit]
+                                             (swap! initialized conj (:state visit))
+                                             {})}]}))]
+      (is (= [:root] (mapv :state visits)))
+      (is (= [:root :root] @initialized)))))
+
+(deftest next-callbacks-run-before-duplicate-or-path-repeat-rejection
+  (doseq [algorithm [search/dfs search/bfs search/simple-paths
+                     search/postorder search/best-first]]
+    (let [prepared (atom [])
+          visits (vec (algorithm
+                       {:root [:child] :child [:root]} [:root]
+                       {:extensions
+                        [{:next (fn [parent transition visit]
+                                  (swap! prepared conj
+                                         [(:state parent)
+                                          (:state transition)
+                                          (:state visit)])
+                                  {})}]}))]
+      (is (= #{:root :child} (set (map :state visits))))
+      (is (= 2 (count visits)))
+      (is (= [[:root :child :child] [:child :root :root]]
+             @prepared)))))
+
 (deftest extensions-compose-in-order-and-can-replace-custom-fields
   (let [initial {:start (fn [_] {::value 1})
                  :next (fn [parent _ _]

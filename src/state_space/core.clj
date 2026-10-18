@@ -147,6 +147,9 @@
   extension order, with later fields replacing earlier ones; use namespaced
   keys for independently reusable extensions to avoid accidental collisions.
   Postorder reserves :previous, :via, and :back-edge for its callback views.
+  :start and :next prepare candidates before duplicate or path-repeat
+  rejection, so they may run for visits that are never emitted. Prefer pure
+  callbacks; use result consumption for actions on emitted visits.
   Inputs are the caller's responsibility and are not validated; violating
   these expectations may produce unexpected results."
   ([space starts]
