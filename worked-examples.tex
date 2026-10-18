@@ -29,6 +29,8 @@ with:
 \endtt
 
 Evaluate the examples in order in one REPL session.
+The optional tracing chapter can be skipped without losing definitions
+needed by later problems.
 
 For each problem, pause after reading the question and work out a~state
 representation and an approach before continuing to the solution.
@@ -1188,8 +1190,9 @@ duration, rather than clip count; here one multi-topic clip makes the
 seven-minute solution shorter than choosing separate clips for each topic.
 The visit key uses only the remaining topics: different clip histories
 with the same outstanding requirements have the same future choices.
-Keep the selected clips as a~witness without treating each history as a~new
-subproblem. A~chosen clip covers no remaining topic afterward, so it cannot
+Keep the selected clips as a~witness (a~concrete choice achieving the result)
+without treating each history as a~new subproblem.
+A~chosen clip covers no remaining topic afterward, so it cannot
 be selected again.
 
 \secc Grow a~minimum spanning tree
@@ -1302,7 +1305,7 @@ respectively. There are no other routes. The estimated remaining times are
 \noindent{\bf Solution.} Best-first can prioritize each visit by the time
 already travelled plus the estimated time remaining. This is
 \ulink[https://en.wikipedia.org/wiki/A*_search_algorithm]{A* search}; the
-estimates here are consistent, so the first settled goal has minimum travel
+estimates here are consistent, so the first goal selected for output has minimum travel
 time:
 
 \begtt \hisyntax{clojure}
@@ -1477,6 +1480,173 @@ distinct automaton states at the same graph node separate:
    :labels (mapv :label (rest (:trail route)))})
 ;; => {:route [:start :middle :target], :labels ["a" "b"]}
 \endtt
+
+\sec Observing traversal progress
+
+These optional tracing problems revisit DFS, simple paths, and weighted
+search after their ordinary uses. Events expose progress; they do not
+replace the result computations in the preceding examples.
+
+\secc Log the start and finish of each folder scan
+
+\noindent{\bf Problem.} A~project folder contains \code{:src} and
+\code{:tests}, in that order. The \code{:src} folder contains
+\code{:parser} and \code{:lexer}, in that order; \code{:parser},
+\code{:lexer}, and \code{:tests} have no subfolders. Starting at
+\code{:project}, scan each folder's subfolders depth-first in the given
+order. Produce a~log with a~start entry for each folder before scanning its
+subfolders and a~finish entry after all of them have been scanned. Also
+list the folders in the order their scans finish.
+
+\smallskip
+\noindent{\bf Solution.} Represent each folder as a~state and its immediate
+subfolders as successors. Ask DFS for lifecycle events: \code{:enter}
+marks the start of a~folder's scan, and \code{:exit} marks its finish.
+Even a~folder with no subfolders has both events:
+
+\begtt \hisyntax{clojure}
+(def project-folders
+  {:project [:src :tests]
+   :src [:parser :lexer]
+   :parser []
+   :lexer []
+   :tests []})
+
+(def scan-events
+  (ss/dfs project-folders [:project] {:emit :events}))
+
+(mapv (juxt :state :phase) scan-events)
+;; => [[:project :enter] [:src :enter]
+;;     [:parser :enter] [:parser :exit] [:lexer :enter] [:lexer :exit]
+;;     [:src :exit] [:tests :enter] [:tests :exit] [:project :exit]]
+\endtt
+
+The \code{:src} scan finishes only after both \code{:parser} and
+\code{:lexer}; the \code{:project} scan finishes last. Select the finish
+events to obtain the requested completion order:
+
+\begtt \hisyntax{clojure}
+(->> scan-events
+     (filter #(= :exit (:phase %)))
+     (mapv :state))
+;; => [:parser :lexer :src :tests :project]
+\endtt
+
+This is post-order, also available directly through
+\code{(ss/postorder project-folders [:project])}. Selecting \code{:enter}
+instead gives the order in which scans start, the same order as ordinary
+DFS. This example computes a~scan log from a~supplied folder tree; it does
+not read the filesystem. Events are lazy, so consuming only a~prefix of the
+log can leave starts without their corresponding finishes.
+
+\secc Trace when exploration of each route prefix finishes
+
+\noindent{\bf Problem.} From \code{:home}, one-way roads lead to
+\code{:park} and \code{:market}, inspected in that order. Both places have
+a~one-way road to \code{:museum}, which has a~one-way road back to
+\code{:home}. There are no other roads. Starting at home, explore every route
+that does not repeat a~place. Log when exploration of each route prefix
+starts and finishes, then list the prefixes in finish order. Reaching the
+museum by way of the park and by way of the market must count as separate
+route prefixes.
+
+\smallskip
+\noindent{\bf Solution.} Use \code{simple-paths} with lifecycle output and
+record the route with \code{path-extension}. Each occurrence of a~place
+has events for its own route. The road from the museum back home is rejected
+because home is already on that route:
+
+\begtt \hisyntax{clojure}
+(def route-prefix-map
+  {:home [:park :market]
+   :park [:museum]
+   :market [:museum]
+   :museum [:home]})
+
+(mapv (juxt :path :phase)
+      (ss/simple-paths route-prefix-map [:home]
+                       {:emit :events :extensions [ss/path-extension]}))
+;; => [[[:home] :enter]
+;;     [[:home :park] :enter]
+;;     [[:home :park :museum] :enter] [[:home :park :museum] :exit]
+;;     [[:home :park] :exit]
+;;     [[:home :market] :enter]
+;;     [[:home :market :museum] :enter] [[:home :market :museum] :exit]
+;;     [[:home :market] :exit] [[:home] :exit]]
+\endtt
+
+An exit means every allowed continuation of this particular prefix has
+been handled. Request exit-only output to get the finish order directly:
+
+\begtt \hisyntax{clojure}
+(mapv :path
+      (ss/simple-paths route-prefix-map [:home]
+                       {:emit :exit :extensions [ss/path-extension]}))
+;; => [[:home :park :museum] [:home :park]
+;;     [:home :market :museum] [:home :market] [:home]]
+\endtt
+
+Ordinary DFS would explore the museum only on its first arrival, skipping
+its occurrence through the market. Simple-path traversal instead gives
+post-order over route occurrences, without allowing cycles within a~route.
+
+\secc Trace selection and local expansion of a~route search
+
+\noindent{\bf Problem.} A~directed road map has three locations:
+\code{:start}, \code{:via}, and \code{:goal}. From start, inspect a~road
+to goal costing 10, then a~road to via costing 1. Via has one road to goal
+costing 2; goal has no outgoing roads. Starting at start, compare BFS
+with least-cost search. For each search, log when a~location is selected
+and when all its outgoing roads have been examined. Which arrival at goal
+does each search select?
+
+\smallskip
+\noindent{\bf Solution.} Decode roads into destination and weight, and
+request events from both searches. Entry means the location is selected;
+expansion means its outgoing transitions have been handled, not that every
+route from it has finished:
+
+\begtt \hisyntax{clojure}
+(def progress-roads
+  {:start [[:goal 10] [:via 1]]
+   :via [[:goal 2]]
+   :goal []})
+
+(def progress-options
+  {:emit :events
+   :extensions [ss/path-extension]
+   :decode-edge (fn [[state weight]] {:state state :weight weight})})
+
+(mapv (juxt :state :phase)
+      (ss/bfs progress-roads [:start] progress-options))
+;; => [[:start :enter] [:goal :enter] [:via :enter]
+;;     [:start :expand] [:goal :expand] [:via :expand]]
+
+(mapv (juxt :state :phase)
+      (ss/best-first progress-roads [:start] progress-options))
+;; => [[:start :enter] [:start :expand] [:via :enter]
+;;     [:via :expand] [:goal :enter] [:goal :expand]]
+\endtt
+
+BFS accepts the direct goal arrival before exploring via; it minimizes the
+number of roads, not their cost. Best-first first queues the cost-10
+candidate, then replaces it with the cost-3 arrival through via before
+selecting goal. That discarded candidate has no entry event:
+
+\begtt \hisyntax{clojure}
+(mapv (fn [algorithm]
+        (:path (first (filter #(and (= :goal (:state %))
+                                    (= :enter (:phase %)))
+                              (algorithm progress-roads [:start]
+                                         progress-options)))))
+      [ss/bfs ss/best-first])
+;; => [[:start :goal] [:start :via :goal]]
+\endtt
+
+BFS's successor chunk accepts the goal and via visits before reporting
+start's expansion. Best-first instead examines all of start's roads and updates pending
+candidates before selecting via. Neither expansion event is a~DFS return, and
+filtering these events does not give post-order.
 
 \sec Computing after successors
 
@@ -1695,6 +1865,62 @@ has no route back to an earlier node. A~general graph with negative cycles
 needs a~different algorithm; negative-cycle detection is outside this
 library's API.
 
+\secc Restore from the first available copy
+
+\noindent{\bf Problem.} A~document can be restored from a~local copy or,
+if that is missing, from a~slower network copy. In this case the local copy
+is available. Check it first and use the network only as a~fallback.
+Which source is used, and can the network lookup be skipped?
+
+\smallskip
+\noindent{\bf Solution.} Give the preferred source first in the successor
+order. Each available source returns its name as its value; the restore
+fold uses \code{reduced} to stop once a~completed source succeeds.
+
+Clojure's \code{reduced} function wraps the selected source to signal that
+this visit needs no more children. The fold unwraps it before publishing
+the result. This is a~local early stop, not a~command to end the whole search.
+
+\begtt \hisyntax{clojure}
+(def available-copies #{:local-copy})
+
+(def restore-fold
+  {:init (fn [{:keys [state]}]
+           (when (contains? available-copies state) state))
+   :step (fn [source child]
+           (if-let [available (:value child)]
+             (reduced available)
+             source))})
+
+(ss/postorder {:restore [:local-copy :network-copy]
+               :local-copy []
+               :network-copy []}
+              [:restore]
+              {:fold restore-fold})
+;; => ({:state :local-copy, :value :local-copy}
+;;     {:state :restore, :value :local-copy})
+\endtt
+
+The network-copy visit is absent because the local copy succeeded. If it
+were unavailable, traversal would continue to the network copy.
+This example models availability with a~set; it performs no file or network
+operations.
+
+\smallskip
+\noindent{\bf Direct alternative.} For a~flat list of sources, ordinary
+short-circuit selection is clearer:
+
+\begtt \hisyntax{clojure}
+(some #(when (contains? available-copies %) %)
+      [:local-copy :network-copy])
+;; => :local-copy
+\endtt
+
+\code{some} stops at the first available source, so short-circuiting is
+not an advantage unique to \code{postorder}. The traversal version
+demonstrates a~short-circuit fold, which is useful when determining a~source's
+availability itself requires processing successors.
+
 \secc Find the value of tic-tac-toe under perfect play
 
 \noindent{\bf Problem.} Two players play tic-tac-toe\fnote{Players take
@@ -1752,6 +1978,105 @@ The empty board's value is zero: optimal play from both sides leads to a~
 draw. The same bottom-up traversal used for dependency computations can
 therefore evaluate a~game tree by
 \ulink[https://en.wikipedia.org/wiki/Minimax]{minimax}.
+This version deliberately evaluates every reachable board, making the
+memoized position count visible. The next example adds alpha-beta windows
+when the goal is to avoid evaluating branches rather than enumerate them.
+
+\secc Skip game branches that cannot improve the decision
+
+\noindent{\bf Problem.} In a~two-player game, Max chooses one of
+\code{:a}, \code{:b}, or \code{:c}, in that inspection order. Min then
+chooses a~terminal outcome: the ordered scores under a~are 3, 12, and 8;
+under b~they are 2, 4, and 6; under c~they are 14, 5, and 2. Scores are
+payoffs to Max; Max wants the largest score and Min wants the smallest.
+Find the value under optimal play. Can some outcomes be left unexamined
+without changing that value?
+
+\smallskip
+\noindent{\bf Solution.} Use alpha-beta pruning. Alpha is the lower bound
+already available to Max; beta is the upper bound available to Min.
+Together they form the search window, passed down to restrict which
+outcomes can still affect the decision.
+After finishing a, Max can secure 3. At b, seeing its first outcome of 2
+is enough: Min can choose 2 or less, so Max will not prefer b~to a.
+The remaining two b~outcomes need not be examined.
+
+A~fold keeps the score and current window in its accumulator. Its
+\code{:descend} callback gives the next child the window updated by earlier
+siblings; \code{:step} narrows the window and stops with \code{reduced}
+when alpha reaches beta. Initialize the root with an unbounded window:
+
+\begtt \hisyntax{clojure}
+(def pruning-game
+  {:root [:a :b :c]
+   :a [:a1 :a2 :a3]
+   :b [:b1 :b2 :b3]
+   :c [:c1 :c2 :c3]})
+
+(def terminal-scores
+  {:a1 3 :a2 12 :a3 8
+   :b1 2 :b2 4 :b3 6
+   :c1 14 :c2 5 :c3 2})
+
+(def alpha-beta-fold
+  {:init (fn [{:keys [state depth alpha beta]}]
+           (if (contains? terminal-scores state)
+             (reduced {:score (terminal-scores state)})
+             {:max? (even? depth)
+              :alpha alpha :beta beta
+              :score (if (even? depth) ##-Inf ##Inf)}))
+   :descend (fn [window _transition _child]
+              (select-keys window [:alpha :beta]))
+   :step (fn [{:keys [max?] :as window} {:keys [value]}]
+           (let [score ((if max? max min) (:score window) value)
+                 window (-> window
+                            (assoc :score score)
+                            (update (if max? :alpha :beta)
+                                    (if max? max min) score))]
+             (if (>= (:alpha window) (:beta window))
+               (reduced window)
+               window)))
+   :finish :score})
+
+(def pruning-options
+  {:extensions [ss/depth-extension
+                {:start (fn [_] {:alpha ##-Inf :beta ##Inf})}]
+   :visit-key (juxt :state :depth :alpha :beta)
+   :fold alpha-beta-fold})
+
+(def pruned-positions
+  (ss/postorder pruning-game [:root] pruning-options))
+
+[(:value (last pruned-positions))
+ (mapv :state (filter #(contains? terminal-scores (:state %))
+                     pruned-positions))]
+;; => [3 [:a1 :a2 :a3 :b1 :c1 :c2 :c3]]
+\endtt
+
+Only seven of the nine terminal outcomes are evaluated. The result agrees
+with full minimax: the branch values are 3, 2, and 2, so Max chooses 3.
+The fold never requests the transitions to \code{:b2} or \code{:b3}.
+To trace that same computation, change only the output selection:
+
+\begtt \hisyntax{clojure}
+(let [events (ss/dfs pruning-game [:root]
+                     (assoc pruning-options :emit :events))]
+  [(frequencies (map :phase events))
+   (:value (last events))])
+;; => [{:enter 11 :exit 11} 3]
+\endtt
+
+No custom traversal or extra pruning callbacks are needed to add tracing.
+Events observe the pruning; they do not control it.
+
+This tree has no shared positions, but the visit key still includes the
+window and turn depth to make the computation's identity explicit. In
+a~game DAG, a~cutoff result can be only a~bound, not an exact value.
+Reusing it by board position alone under another window can change the
+answer. A~specialized transposition table can reuse bounds more efficiently;
+the fold here instead memoizes each position with its evaluation context.
+A~recursive alpha-beta function can be shorter for small trees; the fold
+provides stack safety and shared-key memoization without a~recursive walk.
 
 \secc Schedule ordered preparation steps
 
@@ -1786,56 +2111,6 @@ This produces the schedule lazily and adds each duration once. A~dependency
 traversal becomes useful when steps have shared prerequisites to evaluate,
 not merely because the steps have a~fixed order.
 
-\secc Restore from the first available copy
-
-\noindent{\bf Problem.} A~document can be restored from a~local copy or,
-if that is missing, from a~slower network copy. In this case the local copy
-is available. Check it first and use the network only as a~fallback.
-Which source is used, and can the network lookup be skipped?
-
-\smallskip
-\noindent{\bf Solution.} Give the preferred source first in the successor
-order. Each available source returns its name as its value; the restore
-fold uses \code{reduced} to stop once a~completed source succeeds:
-
-\begtt \hisyntax{clojure}
-(def available-copies #{:local-copy})
-
-(def restore-fold
-  {:init (fn [{:keys [state]}]
-           (when (contains? available-copies state) state))
-   :step (fn [source child]
-           (if-let [available (:value child)]
-             (reduced available)
-             source))})
-
-(ss/postorder {:restore [:local-copy :network-copy]
-               :local-copy []
-               :network-copy []}
-              [:restore]
-              {:fold restore-fold})
-;; => ({:state :local-copy, :value :local-copy}
-;;     {:state :restore, :value :local-copy})
-\endtt
-
-The network-copy visit is absent because the local copy succeeded. If it
-were unavailable, traversal would continue to the network copy.
-
-\smallskip
-\noindent{\bf Direct alternative.} For a~flat list of sources, ordinary
-short-circuit selection is clearer:
-
-\begtt \hisyntax{clojure}
-(some #(when (contains? available-copies %) %)
-      [:local-copy :network-copy])
-;; => :local-copy
-\endtt
-
-\code{some} stops at the first available source, so short-circuiting is
-not an advantage unique to \code{postorder}. The traversal version
-demonstrates a~short-circuit fold, which is useful when determining a~source's
-availability itself requires processing successors.
-
 \secc Find the edge that closes a~dependency cycle
 
 \noindent{\bf Problem.} A~deployment has two tasks, \code{:api} and
@@ -1846,7 +2121,7 @@ whether it points back to a~task that is still being explored.
 \smallskip
 \noindent{\bf Solution.} Post-order traversal terminates even when the
 graph has cycles. Its fold receives each successor's
-\code{decoded} incoming edge and a~\code{:back-edge} flag, which identifies an
+decoded incoming edge in \code{:via} and a~\code{:back-edge} flag, which identifies an
 edge to a~task still being explored:
 
 \begtt \hisyntax{clojure}

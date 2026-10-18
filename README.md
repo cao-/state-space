@@ -100,9 +100,10 @@ Choose an algorithm based on the result you need:
 - `simple-paths` enumerates routes without repeating a state on a route.
 - `postorder` visits successors before their parents, useful for dependency
   ordering and memoized bottom-up computations. Its optional `:fold` combines
-  child results incrementally, using `reduced` for early stopping.
+  child results incrementally and can skip remaining children once a result
+  is known.
 - `propagate` repeatedly joins information arriving at states until the
-  worklist is empty.
+  worklist (the queue of states still to process) is empty.
 
 See the [State-space documentation](https://github.com/cao-/state-space/releases/latest/download/state-space.pdf)
 for the full API, options, and algorithm assumptions. The
@@ -135,8 +136,10 @@ shortest-path guarantee.
 
 ## Bottom-up computations
 
-Initialize an accumulator for each state, then incorporate each child's
-computed `:value`. The traversal supplies stack safety and memoization:
+A fold computes a parent's result from its children's results. Initialize
+an accumulator (the running result) for each state, then update it with each
+child's computed `:value`. The traversal reuses results for shared states
+(memoization) and handles deep searches without growing the JVM call stack:
 
 ```clojure
 (ss/postorder {:root [:left :right]} [:root]
@@ -146,10 +149,30 @@ computed `:value`. The traversal supplies stack safety and memoization:
 ;;     {:state :root :value 3})
 ```
 
-An optional `:finish` in the fold converts the accumulator to the published
-value. Return `(reduced accumulator)` from `:init` or `:step` to finish a
-visit without requesting more children. Child vectors are not collected
-unless the fold explicitly builds one.
+Here each state counts itself, then adds its children's counts. An optional
+`:finish` callback converts the final accumulator to the visit's `:value`;
+without it, the accumulator itself is the value.
+
+To stop processing a visit's remaining children early, return the accumulator
+from `:step` wrapped with Clojure's `reduced` function—for example,
+`(reduced true)` once a match is found. Returning it from `:init` skips all
+children of that visit.
+The fold unwraps the value before applying `:finish`. This completes only
+the current visit, not the whole traversal. Child results are passed to
+`:step` one at a time, not collected into a vector unless the fold builds one.
+
+Projection and identity are intentionally independent: `:project` chooses
+the input to the successor function, while `:visit-key` defines which
+arrivals the algorithm treats as equivalent. Both receive the full visit.
+A key can include relevant context or ignore fields that only record a
+witness, such as a path. For folds, a non-nil key identifies computations
+whose results can be shared, independently of what the space needs as input.
+Include route context in that key when it affects the computed result.
+Shared children are evaluated once but contribute to each incoming edge;
+use sets rather than sums to count distinct descendants. On a cycle, a
+child passed to `:step` can refer back to a visit still being explored.
+That child has `:back-edge true` and no computed `:value`.
+Handle that case explicitly, or use propagation for cyclic fixed points.
 
 ## Combining information through cycles
 
@@ -178,7 +201,82 @@ capabilities reaching it, not just those on its first arrival:
 
 A visit-once traversal can miss information arriving later. `propagate`
 joins incoming sets and schedules a state again when its value changes.
+The `:join` option is the combining function, and `:bottom` is the initial value
+for a newly reached state before any contributions are combined.
 Here, propagation terminates because sets only grow within a finite set of
 capabilities on a finite graph; arbitrary joins and state spaces need not
 terminate. Each progress record exposes the current values and changes,
 so you can inspect intermediate results instead of taking only the last.
+
+## Advanced: traversal output and tracing
+
+Ordinary searches need no output options. When you need depth-first return
+order (children before their parent) or want to observe progress, select an
+output. Only `:events` adds `:phase` tags; `:enter` and `:exit` return
+untagged visits:
+
+| Operation | `:emit :enter` (default) | `:emit :exit` | `:emit :events` |
+|-----------|-------------------------|---------------|-----------------|
+| `dfs`, `simple-paths` | Pre-order visits | Post-order visits | Entry and return snapshots |
+| `bfs`, `best-first` | Ordinary visits | Not supported | Entry and local-expansion snapshots |
+
+```clojure
+(mapv (juxt :state :phase)
+      (ss/dfs {:root [:left :right]} [:root] {:emit :events}))
+;; => [[:root :enter] [:left :enter] [:left :exit]
+;;     [:right :enter] [:right :exit] [:root :exit]]
+```
+
+`postorder` is the convenient name for `dfs` with `:emit :exit`. Both support
+`:fold`; with `:emit :events`, DFS additionally shows entries before evaluation
+and exits carrying the computed `:value`. Simple-path output describes each
+accepted route occurrence separately and does not support memoized folds.
+
+Event phases are output-only and never enter traversal callbacks:
+
+- `:enter`: a visit is accepted, before requesting its successors.
+- `:exit`: depth-first exploration returns under cycle and pruning rules.
+- `:expand`: BFS or best-first has handled the immediate outgoing transitions,
+  **not** completed descendants. BFS can accept children before this marker;
+  best-first emits it before selecting another visit.
+
+Reserve `:phase` for these tags rather than using it as route context.
+Without a fold, filtering entries and removing `:phase` recovers ordinary
+visit order. A fold can also cut off siblings and therefore change which
+visits occur.
+Pruned visits still report completion. Lazy consumption can leave entries
+without completion events; infinite branches or successor streams may never
+finish. Events are observations, not guaranteed resource-cleanup callbacks.
+The documentation and worked examples explain cycle handling, shared states,
+and precise callback timing.
+
+## Advanced: sibling-dependent pruning
+
+An optional fold callback, `:descend`, receives
+`[accumulator transition child]` and returns context fields to merge into the
+child after route extensions, before computing its key. It sees the parent's
+updated accumulator after earlier siblings contribute. Combined with
+`:step` and `reduced`, this enables alpha-beta pruning without mutable
+feedback from event consumers.
+
+Initialize root context with a `:start` extension. Include descended fields
+affecting results in the visit key. In alpha-beta search, a cutoff may
+establish only a lower or upper bound on the score, not its exact value;
+that bound must not be reused as an exact score under different search
+bounds. The worked examples contain a complete
+alpha-beta problem and explain this distinction. A recursive solution may be
+shorter for a small tree; folds supply stack safety and contextual memoization.
+
+## Option reference
+
+The graph searches share `:project`, `:expand?`, `:decode-edge`, `:visit-key`,
+and `:extensions`. Output options are listed above. DFS and post-order also
+accept `:fold`; best-first accepts `:priority`. Propagation shares only
+`:project`, `:expand?`, and `:decode-edge`, with required `:bottom` and `:join`.
+
+Only supported execution modes are checked: invalid `:emit` values on
+operations with selectable output, folds with `:visit-key nil`, and DFS
+folds with entry-only output throw `ExceptionInfo` when called. Unused
+options are ignored, including `:emit` on fixed-output operations and
+`:fold` on operations without folding. Traversal callbacks remain lazy;
+data and callback contracts are the caller's responsibility, not validated.

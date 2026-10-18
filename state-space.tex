@@ -30,10 +30,13 @@ with:
 (require '[state-space.core :as ss])
 \endtt
 
-The algorithm sections introduce the core searches in order. The later
-sections on \ref[identity]{visit identity},
-\ref[transitions]{additional visit data}, and
-\ref[options]{termination} are reference material. All public operations
+The algorithm sections introduce the core searches in order. Continue with
+\ref[identity]{visit identity} and \ref[transitions]{route and transition
+data} when the defaults are not enough. The separate
+\ref[folds]{bottom-up evaluation} section explains folds; optional
+\ref[events]{tracing} follows those building blocks.
+The \ref[options]{options and termination} section is reference material.
+All public operations
 and options are explained here; the companion
 \ulink[https://github.com/cao-/state-space/releases/latest/download/worked-examples.pdf]
 {Worked examples PDF} provides practice rather than required background.
@@ -179,13 +182,14 @@ Extensions run in order. Each callback sees the visit fields added by
 earlier extensions at that stage, and later results override same-named
 context fields. Callbacks must preserve \code{:state}; use separate keys
 for context, preferably namespaced keywords in independently reusable
-extensions to avoid accidental collisions. Post-order traversal reserves
+extensions to avoid accidental collisions. Bottom-up folding reserves
 \code{:value} for computed fold results, and \code{:via} and
 \code{:back-edge} for successor views;
 extensions must not use these as their own context fields.
+Event output also reserves \code{:phase} for traversal tags.
 These are caller expectations, not runtime checks; inputs that violate them
 may produce unexpected results.
-Section~\ref[transitions]{Additional visit and transition
+Section~\ref[transitions]{Route extensions and transition
 data} shows a~custom extension using all these inputs.
 
 \secc Breadth-first search
@@ -291,27 +295,36 @@ consumed:
 ;; => [0 1 2 3]
 \endtt
 
-A~finite graph can still have many simple paths.
+A~finite graph can still have many simple paths. Ordinary output lists
+prefixes as they are entered; \code{:emit :exit} lists them when their
+exploration finishes, and \code{:emit :events} reports both boundaries.
+See \ref[events]{traversal output} for those optional views.
 
 \secc Post-order traversal
 
-\code{postorder} returns each state after its successors, in depth-first
-post-order. When edges point from a~task to its prerequisites, prerequisites
-therefore appear first. For example, this gives a~valid build order:
+\code{postorder} returns each visit after handling its successors, in
+depth-first post-order. When edges point from a~task to its prerequisites
+in a~directed acyclic graph (DAG: a~directed graph with no cycles),
+prerequisites therefore appear first. For example, this gives
+a~valid build order:
 
 \begtt \hisyntax{clojure}
 (ss/postorder {:package [:compile]
-                     :compile [:parse]
-                     :parse []}
-                    [:package])
+               :compile [:parse]
+               :parse []}
+              [:package])
 ;; => ({:state :parse} {:state :compile} {:state :package})
 \endtt
 
-On a~cyclic graph, back edges are ignored for traversal and the search
+On a~cyclic graph, an edge back to a~visit still being explored is called
+a~back edge. These edges are ignored for traversal and the search
 terminates with DFS post-order when the reachable graph and its successor
 collections are finite; that order is a~valid topological ordering only when
 the reachable graph is acyclic.
-Post-order traversal requires a~non-\code{nil} \code{:visit-key}.
+Without a~fold, \code{:visit-key nil} disables deduplication in post-order
+as in ordinary DFS. It can traverse repeated tree occurrences, but no longer
+prevents following cycles forever. Memoized folding requires a~non-\code{nil}
+\code{:visit-key}.
 
 Post-order traversal is lazy between completed visits, but it finishes
 processing a~visit's successors before returning that visit. Taking the first
@@ -334,8 +347,11 @@ A~chunked lazy successor collection returned by the space may itself compute
 several raw successors when its first item is requested.
 
 Post-order traversal also supports a~streaming \code{:fold} over completed
-successors, with \code{reduced} for early stopping. Its examples
-appear in section~\ref[transitions]{Additional visit and transition data}.
+successors, combining their results one at a~time and allowing early
+stopping. This is an evaluation
+layer, not something that traversal order alone provides: shared successor
+results must be cached and supplied to every parent that uses them.
+See \ref[folds]{Bottom-up evaluation} for the fold API and examples.
 
 \secc[propagation] State propagation
 
@@ -348,7 +364,8 @@ definitions in a~compiler control-flow graph.
 \code{propagate} takes a~space, a~map from starting states to initial
 values, and an options map. \code{:join} combines a~state's old value with
 an incoming contribution. \code{:bottom} is the value used before a~state
-has received any contributions; it should be an identity for the join.
+has received any contributions; combining it with a~contribution should
+give that contribution unchanged (an identity for the join).
 For sets of known facts, these are set union and the empty set:
 
 \begtt \hisyntax{clojure}
@@ -416,9 +433,13 @@ extensions.
 
 Unlike the search algorithms, propagation intentionally revisits a~state
 when its value changes. For order-independent results, the join should be
-associative, commutative, and idempotent, and transfer functions should be
-monotone in the information order: learning more at a~state must not
-invalidate facts it previously sent. Termination depends on the problem:
+associative (grouping contributions does not matter), commutative (their
+order does not matter), and idempotent (repeating a~contribution adds
+nothing). A~transfer function is the computation that turns a~state's value
+into outgoing contributions. It should be monotone in the information
+order: learning more at a~state must not invalidate facts it previously
+sent. A~fixed point is reached when further processing changes no values.
+Termination depends on the problem:
 the two facts above can only accumulate to a~fixed point, but arbitrary
 spaces and value domains need not stabilize. These are
 caller assumptions; the library does not validate them. Each expanded state
@@ -495,7 +516,9 @@ a~lower-bound estimate to the goal:
 
 With the default \code{:visit-key} of \code{:state}, best-first settles each
 state key at most once, using the best priority offered for it before
-settlement. For A*, a~consistent heuristic with value zero at the goal is
+settlement. Settling means selecting its pending visit for output; later
+arrivals at that key are ignored. For A*, a~consistent heuristic (remaining-cost
+estimate) with value zero at the goal is
 sufficient for an optimal first goal: for every edge from \code{u} to
 \code{v}, its estimate must satisfy \code{h(u) <= weight(u,v) + h(v)}.
 An admissible heuristic never overestimates the remaining cost.
@@ -507,7 +530,7 @@ best-first treat each state and cost pair as a~separate search position.
 This may greatly increase the search and may prevent termination on cyclic
 spaces. It is not a~general reopening mechanism for priorities that depend on
 other visit context. Transition weights must be finite and non-negative.
-Equal priorities are emitted in FIFO enqueue order; when starts or
+Equal priorities are emitted in first-in, first-out (FIFO) enqueue order; when starts or
 successors come from an unordered collection, their tie order may vary.
 Zero-weight edges are supported, but on an infinite space an infinite region
 of equal or lower priority can indefinitely delay a~positive-cost result.
@@ -532,6 +555,22 @@ search space is infinite:
 \endtt
 
 \secc[identity] Visit identity
+
+State, projection, and identity answer different questions. The
+\code{:state} field represents the problem-domain position.
+\code{:project} chooses the input passed to the successor function;
+\code{:visit-key} defines which arrivals the algorithm treats as equivalent.
+Both callbacks receive the full visit, and their results need not be equal.
+This separation lets a~key distinguish relevant evaluation context while
+the space receives only the state, or ignore witness fields such as a~path
+while the space reads richer context.
+
+For example, a~game's legal moves may depend only on its board, so
+\code{:project :state} is enough. A~memoized alpha-beta evaluation can
+independently use \code{(juxt :state :depth :alpha :beta)} as its key:
+the board, turn context, and search window identify the computation whose
+result can be reused. Projection describes the space's input; identity
+describes sharing, not a~second representation of that input.
 
 By default, DFS, BFS, post-order traversal, and best-first treat visits with
 equal \code{:state} values as the same search position. This avoids exploring a~
@@ -591,12 +630,19 @@ This is appropriate when the shallowest arrival is the one that should
 govern exploration. If a~later arrival's context must also be explored, add
 that context to \code{:visit-key}, as above.
 
-The key function receives the full visit map. For DFS and BFS,
-\code{:visit-key nil} disables global deduplication; on a~cycle, this can
-produce an infinite result. \code{simple-paths} uses its key only to prevent
-repeats within a~route; setting it to \code{nil} disables that check.
-Identity affects correctness too: if equal keys can have different
-successors, treating those visits as the same can change the search results.
+The key function receives the full visit map. DFS, BFS, and post-order
+without a~fold allow global deduplication to be disabled by setting
+\code{:visit-key} to \code{nil}. On a~cycle, this can produce an infinite
+result. Simple paths use the key only to prevent repeats within a~route;
+setting it to \code{nil} disables that check.
+Choosing identity is part of modeling the problem. Traversal keys decide
+which arrivals need exploration; fold keys decide which computed results
+can be reused; simple-path keys decide what counts as a~repeat on a~route.
+Equivalent arrivals need not have identical full visits. For example,
+different paths can provide different witnesses to the same subproblem.
+Retain distinctions that affect the required computation, and omit those
+that do not. The shallowest-arrival example above also shows how an
+algorithm's ordering can make a~later arrival unnecessary.
 
 For a~tree, disabling deduplication makes DFS visit each occurrence, like
 \code{clojure.core/tree-seq}. The successor function supplies the children
@@ -619,12 +665,16 @@ nodes. Here the two equal branch subtrees are distinct occurrences:
 
 (values (tree-seq (comp seq :children) :children tree))
 ;; => [:root :branch :leaf :branch :leaf]
+
+(values (map :state (ss/postorder :children [tree] {:visit-key nil})))
+;; => [:leaf :branch :leaf :branch :root]
 \endtt
 
 With the default key, the second equal branch is skipped. Setting the key to
-\code{nil} preserves both occurrences, matching \code{tree-seq}'s traversal.
+\code{nil} preserves both occurrences, matching \code{tree-seq}'s preorder.
+The same setting also preserves occurrences when traversing in post-order.
 
-\secc[transitions] Additional visit and transition data
+\secc[transitions] Route extensions and transition data
 
 Once an algorithm and its order are chosen, extensions can carry
 problem-specific information in visits. As in weighted best-first search,
@@ -739,10 +789,21 @@ called for that visit and no successors are generated:
 ;; => ({:state 0 :depth 0} {:state 1 :depth 1} {:state 2 :depth 2})
 \endtt
 
-Post-order traversal can fold successor results into a~computed
-\code{:value}. Supply a~\code{:fold} map with \code{:init}, which receives
-each newly entered visit, and \code{:step}, which receives the accumulator
-and one successor view. For example, count the tasks in each dependency
+\secc[folds] Bottom-up evaluation
+
+Route extensions carry information from parent to child. A~fold instead
+combines results from children into a~parent result. Use \code{postorder}
+when only those completed results are needed; DFS with exit or event output
+supports the same evaluation.
+Folding requires a~non-\code{nil} visit key for memoization; simple paths
+do not provide occurrence-based folding.
+
+Supply a~\code{:fold} map to compute \code{:value}, with \code{:init}, which receives
+each newly entered visit and returns its initial accumulator (the running
+result), and \code{:step}, which receives that accumulator and one successor
+view, then returns the updated accumulator. A~successor view is the child
+visit supplied to this parent, including its result and the connecting edge.
+For example, count the tasks in each dependency
 subtree:
 
 \begtt \hisyntax{clojure}
@@ -774,8 +835,12 @@ completed key, including leaves and early stops. It can extract a~result
 from a~larger working accumulator. Return a~map value when computing
 several results together.
 
-Return \code{(reduced accumulator)} from \code{:step} to finish this parent
-without requesting another successor. Here a~cached result prevents
+Clojure's \code{reduced} function wraps a~value to signal that accumulation
+should stop, as it does in \code{reduce}. Return
+\code{(reduced accumulator)} from \code{:step} to finish this parent
+without requesting another successor. This completes only the current
+visit, not the entire traversal; its parent can continue with other children.
+Here a~cached result prevents
 exploring the fallback build:
 
 \begtt \hisyntax{clojure}
@@ -795,7 +860,7 @@ exploring the fallback build:
 ;;     {:state :root, :value :cached})
 \endtt
 
-Returning \code{reduced} from \code{:init} also skips the first successor,
+Returning a~value wrapped with \code{reduced} from \code{:init} skips all successors,
 without calling the space, projection, or expansion predicate.
 The wrapper is removed before \code{:finish}. Parent steps run when
 consumption resumes after yielding a~child; stopping at that child need not
@@ -829,7 +894,10 @@ field describes the edge from the current parent, even if a~different
 parent first reached that state. Bottom-up computations on a~DAG can reuse
 completed successor values this way. On a~cycle, a~back edge refers to an
 unfinished visit, so a~fold must not assume every successor has
-its computed fields. Use \ref[propagation]{propagation} instead when
+its computed fields. Completed values may themselves be \code{nil} or
+\code{false}; use \code{:back-edge} or the presence of \code{:value},
+not its truthiness, to distinguish unfinished results.
+Use \ref[propagation]{propagation} instead when
 information must circulate until it stabilizes. If a~result depends on its
 route, choose a~visit key that distinguishes the relevant context rather
 than reusing another route's result. This includes context used by
@@ -842,15 +910,154 @@ on the computed \code{:value}. The reserved \code{:via} and
 \code{:back-edge} fields are supplied in successor views, not on emitted visits. These input
 expectations are not checked at runtime.
 
+\seccc Advanced: passing updated context to the next child
+
+An optional fold callback
+\code{:descend (fn [accumulator transition child] ...)} returns a~map of
+context fields to merge into the child after route extensions, before
+computing its visit key. The accumulator includes results from earlier
+siblings, unlike the original parent visit seen by \code{:next}. This
+explicit downward flow supports sibling-dependent bounds: alpha-beta
+can pass the updated window to the next child and use \code{reduced}
+from \code{:step} to stop when it closes.
+
+\code{:descend} runs once per examined edge, including arrivals at cached
+keys and back edges, but never after a~cutoff. It does not run for starts;
+initialize root context with a~\code{:start} extension. It must return
+a~context map preserving \code{:state} and the reserved fields.
+Only the returned fields become child context; the full accumulator is not
+implicitly exposed. If those fields affect computation, include them in
+the visit key. For example, a~depth-alternating alpha-beta search can key
+by \code{(juxt :state :depth :alpha :beta)}. A~cutoff can publish a~bound,
+not an exact minimax value; reusing it as exact under another window is
+incorrect. Contextual memoization is not a~bound-aware transposition table.
+Such a~table is a~specialized game-search cache that distinguishes exact
+scores from lower and upper bounds when deciding whether to reuse them.
+The worked examples include a~complete alpha-beta search.
+
 For option defaults and termination behavior, see
 section~\ref[options]{Options and termination}.
 
+\secc[events] Advanced: traversal output and progress events
+
+Ordinary searches need no output options. For depth-first return order or
+tracing, \code{dfs} and \code{simple-paths} accept \code{:emit}, selecting
+\code{:enter} (the default), \code{:exit}, or \code{:events}.
+Entry and exit modes return untagged visits in pre-order and post-order
+respectively. Event mode exposes the traversal lifecycle: an
+\code{:enter} snapshot before requesting a~visit's successors and an
+\code{:exit} snapshot after handling them:
+
+\begtt \hisyntax{clojure}
+(mapv (juxt :state :phase)
+      (ss/dfs {:root [:left :right]} [:root] {:emit :events}))
+;; => [[:root :enter] [:left :enter] [:left :exit]
+;;     [:right :enter] [:right :exit] [:root :exit]]
+
+(mapv :state (ss/dfs {:root [:left :right]} [:root] {:emit :exit}))
+;; => [:left :right :root]
+\endtt
+
+\code{postorder} is the convenient exit-only view of DFS, equivalent to
+\code{:emit :exit}, including when folding. Filtering lifecycle events
+gives the same visits without enabling a~fold:
+
+\begtt \hisyntax{clojure}
+(= (ss/postorder {:root [:left :right]} [:root])
+   (->> (ss/dfs {:root [:left :right]} [:root] {:emit :events})
+        (filter #(= :exit (:phase %)))
+        (map #(dissoc % :phase))))
+;; => true
+\endtt
+
+Each accepted visit enters once and exits once if consumption reaches its
+completion. Duplicate arrivals produce neither event. With
+\code{:visit-key nil}, each occurrence has its own entry and exit.
+\code{simple-paths} supports all three outputs too, for each accepted path
+occurrence. Selecting \code{:emit :exit} keeps distinct routes to the same
+state separate. Both snapshots preserve route context; the reserved
+\code{:phase} field is added only to event output, never to extension,
+projection, expansion, or identity callback inputs. Do not use
+\code{:phase} as an extension field in event mode.
+
+Exit follows the traversal's deduplication, cycle, and pruning rules.
+A~visit rejected by \code{:expand?} still enters and exits, without
+requesting successors. Back edges to active visits are skipped, so exit
+does not promise every successor has exited.
+Stopping on entry does not request successors; stopping on exit need not
+inspect the next sibling. Early stopping can leave unmatched entries, and
+an infinite descending branch can produce entries forever without exits.
+Events are observations, not guaranteed resource-cleanup callbacks.
+
+DFS also accepts \code{:fold} with \code{:emit :exit} or
+\code{:emit :events}. Entries have no computed \code{:value}; exits publish
+the result. Fold initialization runs only when consumption resumes after
+entry. A~fold with entry-only output is rejected, since it would not expose
+results. Without a~fold, selecting entries recovers ordinary DFS visits
+after removing \code{:phase}; a~fold can additionally cut off siblings.
+This guarantees visit order and context, not identical callback timing:
+ordinary traversal may prepare a~chunk of candidates ahead.
+\code{simple-paths} ignores \code{:fold}: occurrence-based evaluation
+differs from shared-key memoization.
+\code{postorder} always selects exits and ignores \code{:emit}.
+
+To observe evaluation on descent as well as return, ask DFS for events.
+Using the earlier \code{subtree-size} fold, entries expose route visits
+and exits additionally expose subtree sizes:
+
+\begtt \hisyntax{clojure}
+(vec (ss/dfs {:root [:leaf]} [:root]
+            {:emit :events :fold subtree-size}))
+;; => [{:state :root :phase :enter}
+;;     {:state :leaf :phase :enter}
+;;     {:state :leaf :value 1 :phase :exit}
+;;     {:state :root :value 2 :phase :exit}]
+\endtt
+
+BFS and best-first also accept \code{:emit :events}. Across the searches,
+\code{:phase :enter} means an accepted visit has been selected for
+processing, before requesting its successors. Best-first settles the key
+at that point; a~candidate replaced while pending never emits an entry.
+Their completion event is \code{:phase :expand}, not DFS's
+\code{:phase :exit}. Expansion means only that the visit's immediate
+outgoing transitions have been handled. It does not promise completed
+descendants or a~bottom-up value:
+
+\begtt \hisyntax{clojure}
+(mapv (juxt :state :phase)
+      (ss/bfs {:root [:left :right]} [:root] {:emit :events}))
+;; => [[:root :enter] [:left :enter] [:right :enter]
+;;     [:root :expand] [:left :expand] [:right :expand]]
+
+(mapv (juxt :state :phase)
+      (ss/best-first {:root [:left :right]} [:root] {:emit :events}))
+;; => [[:root :enter] [:root :expand] [:left :enter]
+;;     [:left :expand] [:right :enter] [:right :expand]]
+\endtt
+
+BFS keeps lazy successor chunks: it can accept children before their
+parent's outgoing sequence is exhausted. Infinite starts can postpone all
+expansions, and an infinite outgoing sequence can produce entries forever
+without a~parent expansion event. Best-first consumes the whole finite
+successor collection before selecting the next visit, so its expansion
+event immediately follows its entry. Stopping on that expansion does not
+select the next visit. Neither algorithm reports expansion if a~callback
+throws before it finishes.
+
+Filtering entries and removing \code{:phase} recovers ordinary visits in
+the same order and with the same route context. Both searches also accept
+\code{:emit :enter} explicitly, their unchanged default. They reject
+\code{:emit :exit} but ignore \code{:fold}. Pruned visits still report local
+completion without calling the space. Event fields never enter callbacks
+or identity functions, and events are not guaranteed cleanup notifications.
+
 \secc[options] Options and termination
 
-The following options are common to the graph searches. Best-first also
-accepts \code{:priority}. Post-order traversal supports a~\code{:fold},
-described in
-\ref[transitions]{Additional visit and transition data}.
+The following route options are common to the graph searches. DFS,
+simple-path enumeration, BFS, and best-first also accept \code{:emit};
+best-first accepts
+\code{:priority}. DFS and post-order traversal support a~\code{:fold},
+described in \ref[folds]{Bottom-up evaluation}.
 
 \begitems
 * \code{:project} chooses what is passed to the space, applied to the full
@@ -867,15 +1074,24 @@ described in
 * \code{:visit-key} selects the key used for duplicate detection, applied to
   the full visit. It defaults to \code{:state}; its meaning and restrictions
   vary by algorithm.
-  Post-order traversal and best-first require a~non-\code{nil} key.
+  Memoized folds and best-first require a~non-\code{nil} key.
+* DFS and simple-path enumeration accept \code{:emit}: \code{:enter}
+  (default) returns untagged entry visits; \code{:exit} returns untagged
+  completed visits; \code{:events} returns both, tagged with
+  \code{:phase :enter} or \code{:phase :exit}.
+* BFS and best-first accept \code{:emit :enter} by default, or event
+  output with \code{:emit :events}. Event phases are \code{:enter} and
+  \code{:expand}, distinguishing local expansion from DFS return.
 * Best-first also accepts \code{:priority}, a~function of the visit that
   determines queue order. It defaults to \code{:distance}, which automatically
   enables \code{distance-extension}. A custom priority does not add
   \code{:distance}; add \code{ss/distance-extension} to \code{:extensions}
   if it needs cumulative distance. Priority values must be mutually comparable.
-* Post-order traversal also accepts \code{:fold}, a~map with required
-  \code{:init} and \code{:step} functions and optional \code{:finish}.
-  Without a~fold it returns visits without a~computed \code{:value}.
+* DFS and post-order traversal also accept \code{:fold}, a~map with required
+  \code{:init} and \code{:step} functions and optional \code{:finish}
+  and \code{:descend}.
+  DFS requires exit or event output when folding. Without a~fold, visits
+  have no computed \code{:value}.
 \enditems
 
 \code{simple-paths} uses \code{:visit-key} to prevent repeats on each route,
@@ -885,6 +1101,14 @@ rather than to deduplicate the entire search.
 \code{:decode-edge}; \code{:bottom} and \code{:join} are required. Its map
 keys identify states, so it does not use \code{:visit-key} or
 \code{:extensions}.
+
+Only supported execution modes are checked: invalid \code{:emit} values
+on operations with selectable output, folds with \code{:visit-key nil},
+and DFS folds with entry-only output throw \code{ExceptionInfo} when called,
+before traversal callbacks run. Unused options are ignored, including
+\code{:emit} on fixed-output operations and \code{:fold} on operations
+without folding. Data and callback contracts are the caller's
+responsibility and are not validated.
 
 To exhaust a~result sequence after finitely many visits, the start collection
 and the reachable search must be finite, and calls to the space and callbacks
@@ -910,7 +1134,10 @@ visits indefinitely, although its parent cannot finish unless pruned.
 
 Laziness does not mean constant memory or exactly one callback per returned
 visit. Deduplication retains seen keys, BFS retains a~pending frontier, and
-post-order traversal retains known visits and their computed values.
+DFS with exit or event output retains active ancestor frames for returning
+after its children; entry-only traversal does not retain those frames.
+Post-order evaluation with a~fold also retains known visits and their
+computed values; traversal without a~fold only needs the seen keys.
 Path and trail extensions retain route data. Keeping the head of a~result
 sequence also retains the realized visits; keeping propagation's progress
 records retains their persistent value-map snapshots. A~chunked successor
@@ -923,8 +1150,8 @@ collection of successors. \code{:project}, \code{:visit-key}, and
 \code{:expand?} must be callable; \code{:visit-key} may be \code{nil} only
 where allowed above. When supplied, \code{:decode-edge} must return a~map
 containing \code{:state}. Extension callbacks must return maps. Visit keys
-should have stable equality and hashing. These input contracts are not
-exhaustively validated at runtime.
+should have stable equality and hashing. These data and callback contracts
+are not validated at runtime.
 
 \secc Computational costs
 
@@ -1057,7 +1284,7 @@ The results of the searches are lazy, but laziness here does not promise that
 exactly one callback or successor is processed for each requested result.
 \code{map-lazy} invokes its mapping function one item at a time; it is used
 where start visits are prepared. Other sequence
-operations, such as \code{keep} in the shared traversal, can realize a chunk
+operations, such as \code{keep} in breadth-first traversal, can realize a chunk
 when their input is chunked. The space itself also controls how its
 successors are produced, so consuming one raw successor may realize several
 values from a chunked input. Best-first has an additional requirement: it
@@ -1068,13 +1295,15 @@ state's successors are joined before its progress record is returned.
 Its initial record does not require constructing the worklist; that is
 deferred until the first processing record is requested.
 
-DFS and BFS keep pending work in a frontier of lazy chunks. A stack takes the
-newest chunk first; a queue takes the oldest. Both consume items from the
-current chunk in order, so successors retain their order without first being
-flattened into one collection.
+BFS keeps pending work in a~queue of lazy chunks, taking the oldest chunk
+first. It consumes items from the current chunk in order, so successors
+retain their order without first being flattened into one collection.
 Successor generation itself is delayed until the chunk is consumed.
-In BFS, earlier chunks can therefore supply visits without expanding those
-visits or requesting work from later chunks.
+Earlier chunks can therefore supply visits without expanding those visits
+or requesting work from later chunks. Entry-only DFS uses the same chunk
+mechanics with a~stack, taking the newest chunk first. DFS with exit or event
+output instead keeps lifecycle frames to preserve each active parent's
+continuation and return boundary.
 
 \begingroup
 \typosize[8/9]
@@ -1082,15 +1311,35 @@ visits or requesting work from later chunks.
 \verbinput \hisyntax{clojure}\vitt{src/state_space/internal/frontier.clj} (1-) src/state_space/internal/frontier.clj
 \endgroup
 
-\secc Shared traversal: DFS, BFS, and simple paths
+\secc Traversal engines and lifecycle
 
-\code{explore} owns the mechanics common to depth-first and breadth-first
-search: pop a visit, optionally deduplicate it, yield it, then lazily prepare
-its children and push them onto the frontier. Supplying a stack or queue
-changes the order without duplicating this traversal logic. \code{simple-paths}
-uses the same depth-first engine but replaces global deduplication with a
-per-route refinement. The route's identity keys live in metadata, so they
-control pruning without becoming part of the public visit.
+\code{explore} shares the lean preorder mechanics between ordinary DFS,
+BFS, and simple paths: pop and optionally deduplicate a~visit, yield it,
+then lazily prepare its successors. Stack or queue operations define the
+order. No lifecycle frames, fold accumulators, or event wrappers are
+allocated on this path.
+
+\code{depth-first} selects this path for entry-only output, otherwise using
+\code{depth-first-complete} for return tracking and optional folds. That
+engine is shared by all depth-first exit/event modes and post-order.
+Explicit frames represent entering a~visit and resuming its parent; exit
+selection avoids constructing discarded event maps.
+
+BFS event mode uses \code{breadth-first-events}, a~small queue loop that
+wraps candidates with an operation tag and appends an expansion marker to
+each successor chunk. The separate loop keeps event branching out of
+ordinary per-visit traversal. Exhausting a~chunk emits its marker without
+calling the key function again. Infinite chunks remain incremental.
+Route visits stay separate from emitted phase-tagged snapshots.
+
+\code{simple-paths} replaces global deduplication with a~per-route
+refinement. The route's identity keys live in metadata, so they control
+pruning without becoming part of the public visit. Without a~fold,
+\code{depth-first-complete} retains only seen keys and pending frames, not
+a~cache of completed visits. Rejected arrivals loop without recursive stack
+growth. Both execution paths use the same route preparation, identity, and
+path-refinement helpers; output equivalence is tested across all three-state
+directed graphs.
 
 \begingroup
 \typosize[8/9]
@@ -1099,28 +1348,30 @@ control pruning without becoming part of the public visit.
 \verbinput \hisyntax{clojure}\vitt{src/state_space/core.clj} (\the\sourcefirstline-\the\sourcelastline) src/state_space/core.clj
 \endgroup
 
-\secc Post-order traversal
+\secc Post-order view and bottom-up evaluation
 
-Post-order traversal cannot use the shared loop: a visit must be returned
-only after its successors have finished. Its explicit pending items represent
-entering a visit and resuming its parent. Compact vector frames store the
+\code{postorder} selects the exit view of \code{depth-first} and optionally
+enables its fold evaluation layer. Compact vector frames store the
 operation, visit, identity key, accumulator, remaining successors, and
-optional awaited edge. An inner loop handles cached successors without
-allocating frames for them. Lazy boundaries are needed when yielding
-completed visits and descending into new children, not on every edge.
-Pending frames form a sequence stack, with lazily initialized starts at
+optional awaited edge. An inner loop handles already-known successors
+without allocating frames for them. Lazy boundaries defer successor
+generation after entry and parent folding after a~child's exit.
+Pending frames form a~sequence stack, with lazily initialized starts at
 its tail. No chunk frontier is needed.
-\code{known} stores the first visit for each key and replaces it at
-completion. With a~fold, the reserved \code{:value} field distinguishes a~
+When folding, \code{known} stores the first visit for each key and replaces
+it at completion. The reserved \code{:value} field distinguishes a~
 completed result from an active visit, including results of \code{nil} or
 \code{false}; no separate completion set is needed.
 When a child finishes, its parent's fold step incorporates the completed
 successor view into a~private accumulator. There is no implicit
 processed-child collection.
+Optional \code{:descend} merges fields from the current accumulator into
+the next prepared child before its key is calculated; it changes neither
+the parent route visit nor the cached child of a~different key.
 The same state-only transition reuse applies here. Attributed transitions
 keep their edge fields in \code{:via}, not in the visit itself.
-A~\code{reduced} accumulator stops traversal before requesting another
-transition; \code{:finish} receives its unwrapped value.
+A~\code{reduced} accumulator completes the current visit before requesting
+another of its transitions; \code{:finish} receives its unwrapped value.
 A~chunked source may nevertheless realize multiple raw successors as one
 is consumed. If initialization returns \code{reduced}, the space and
 expansion callbacks are not called for that visit.
@@ -1136,14 +1387,16 @@ after the pruning check, without an intermediate mapped sequence.
 
 \secc Best-first traversal
 
-Best-first orders pending visits by priority, so it uses a sorted map rather
-than the DFS/BFS frontier. \code{queued} records the queue position for
+Best-first orders pending visits by priority, so it uses a~sorted map rather
+than BFS's chunk queue or DFS's lifecycle frames. \code{queued} records the queue position for
 each pending visit key; a better route replaces its previous queue entry,
 so only one candidate per key remains pending. \code{settled} ensures each key
 is emitted once. A monotonically increasing sequence number makes equal
 priorities stable in insertion order. The default cumulative-distance
 priority has Dijkstra's shortest-path behavior when edge weights are
 non-negative.
+Event output tags each selected visit on entry and emits its expansion
+snapshot after relaxation, before selecting another queue item.
 
 \begingroup
 \typosize[8/9]

@@ -87,6 +87,23 @@
               :expand? (get options :expand? (constantly true))}]
     (assoc opts :prepare-visit (visit-preparer opts))))
 
+(defn- search-output [algorithm options allowed]
+  (let [output (get options :emit :enter)]
+    (when-not (some #{output} allowed)
+      (throw (ex-info (str algorithm " supports :emit " (pr-str allowed) ".")
+                      {:algorithm algorithm :option :emit :value output
+                       :allowed allowed})))
+    output))
+
+(defn- check-fold [algorithm options output]
+  (when (:fold options)
+    (when (nil? (get options :visit-key :state))
+      (throw (ex-info "Memoized folds require a non-nil :visit-key."
+                      {:algorithm algorithm :option :visit-key})))
+    (when (= output :enter)
+      (throw (ex-info "A fold requires :emit :exit or :emit :events."
+                      {:algorithm algorithm :option :emit :value output})))))
+
 (defn- map-lazy
   "Unlike chunked map, invokes f only for the requested item."
   [f items]
@@ -99,13 +116,11 @@
   (map-lazy #(initialize-visit extensions {:state %}) starts))
 
 (defn- explore
-  "Shares lazy traversal mechanics; frontier operations define visit order.
-  An optional refine function maps (parent candidate) to a candidate or nil."
+  "Preorder traversal over lazy frontier chunks; stack or queue defines order."
   [space {:keys [decode-edge prepare-visit visit-key] :as opts} refine
    visited pending pop-item push-chunk]
   (lazy-seq
-   (loop [visited visited
-          pending pending]
+   (loop [visited visited, pending pending]
      (when-let [{:keys [item frontier]} (pop-item pending)]
        (let [visit item
              key (when visit-key (visit-key visit))]
@@ -116,25 +131,132 @@
                    (let [children
                          (lazy-seq
                           (keep (fn [successor]
-                                  (let [transition (decode-edge successor)
-                                        candidate (prepare-visit visit transition)]
-                                    (if refine
-                                      (refine visit candidate)
-                                      candidate)))
+                                  (let [candidate (prepare-visit visit (decode-edge successor))]
+                                    (if refine (refine visit candidate) candidate)))
                                 (successors-of space opts visit)))]
                      (explore space opts refine
-                              next-visited
-                              (push-chunk frontier children)
-                              pop-item
-                              push-chunk))))))))))
+                              next-visited (push-chunk frontier children)
+                              pop-item push-chunk))))))))))
 
-(defn- depth-first [space starts options refine]
-  (let [{:keys [visit-key] :as opts} options]
+(defn- breadth-first-events
+  "BFS expansion markers live at the end of their lazy successor chunks."
+  [space {:keys [decode-edge prepare-visit visit-key] :as opts} visited pending]
+  (lazy-seq
+   (loop [visited visited
+          pending pending]
+     (when-let [{:keys [item frontier]} (frontier/queue-pop pending)]
+       (let [[kind visit] item
+             key (when (and visit-key (= kind :enter)) (visit-key visit))]
+         (cond
+           (= kind :expand)
+           (cons (assoc visit :phase :expand)
+                 (breadth-first-events space opts visited frontier))
+
+           (and visit-key (contains? visited key))
+           (recur visited frontier)
+
+           :else
+           (let [next-visited (when visit-key (conj visited key))]
+             (cons (assoc visit :phase :enter)
+                   (let [children
+                         (lazy-seq
+                          (concat
+                           (map-lazy (fn [successor]
+                                       [:enter (prepare-visit visit (decode-edge successor))])
+                                     (successors-of space opts visit))
+                           [[:expand visit]]))]
+                     (breadth-first-events space opts
+                                           next-visited
+                                           (frontier/queue-push frontier children)))))))))))
+
+(defn- depth-first-complete
+  "DFS return tracking for exit/event output and optional bottom-up evaluation.
+  Route visits stay phase-free; only emitted event snapshots carry :phase."
+  [space starts {:keys [decode-edge prepare-visit visit-key] :as opts}
+   refine output fold]
+  (let [{:keys [init step descend] complete :finish
+         :or {complete identity}} fold]
+    (letfn [(fold-child [accumulator child transition]
+              (step accumulator
+                    (-> child
+                        (assoc :via transition)
+                        (assoc :back-edge (not (contains? child :value))))))
+            (continue-visit [visit key pending]
+              (cons [:continue visit key
+                     (when fold (init visit))
+                     (lazy-seq (successors-of space opts visit))
+                     nil]
+                    pending))
+            (walk [known pending]
+              (lazy-seq
+               (loop [known known, pending pending]
+                 (when-let [pending (seq pending)]
+                   (let [[kind visit key accumulator remaining awaiting] (first pending)
+                         pending (rest pending)]
+                     (case kind
+                       :enter
+                       (if (and visit-key (contains? known key))
+                         (recur known pending)
+                         (let [known (cond fold (assoc known key visit)
+                                           visit-key (conj known key)
+                                           :else known)]
+                           (if (= output :exit)
+                             (recur known (continue-visit visit key pending))
+                             (cons (assoc visit :phase :enter)
+                                   (lazy-seq
+                                    (walk known (continue-visit visit key pending)))))))
+
+                       :continue
+                       (loop [accumulator
+                              (if (and fold awaiting)
+                                (let [[child-key transition] awaiting]
+                                  (fold-child accumulator (known child-key) transition))
+                                accumulator)
+                              remaining remaining]
+                         (if-let [remaining (when-not (reduced? accumulator)
+                                              (seq remaining))]
+                           (let [transition (decode-edge (first remaining))
+                                 candidate (prepare-visit visit transition)
+                                 candidate (if descend
+                                             (reduce-kv assoc candidate
+                                                        (descend accumulator transition candidate))
+                                             candidate)
+                                 child (if refine (refine visit candidate) candidate)
+                                 child-key (when (and child visit-key) (visit-key child))]
+                             (if (or (nil? child)
+                                     (and visit-key (contains? known child-key)))
+                               (recur (if (and fold child)
+                                        (fold-child accumulator (known child-key) transition)
+                                        accumulator)
+                                      (rest remaining))
+                               (walk known
+                                     (cons [:enter child child-key]
+                                           (cons [:continue visit key accumulator
+                                                  (rest remaining)
+                                                  (when fold [child-key transition])]
+                                                 pending)))))
+                           (let [finished (if fold
+                                            (assoc visit :value
+                                                   (complete (unreduced accumulator)))
+                                            visit)
+                                 known (if fold (assoc known key finished) known)]
+                             (cons (if (= output :events)
+                                     (assoc finished :phase :exit)
+                                     finished)
+                                   (walk known pending)))))))))))]
+      (walk (if fold {} (when visit-key #{}))
+            (map-lazy (fn [state]
+                        (let [visit (initialize-visit (:extensions opts) {:state state})]
+                          [:enter visit (when visit-key (visit-key visit))]))
+                      starts)))))
+
+(defn- depth-first [space starts {:keys [visit-key] :as opts} refine output fold]
+  (if (= output :enter)
     (explore space opts refine
              (when visit-key #{})
              (frontier/stack-push (frontier/stack) (start-visits opts starts))
-             frontier/stack-pop
-             frontier/stack-push)))
+             frontier/stack-pop frontier/stack-push)
+    (depth-first-complete space starts opts refine output fold)))
 
 (defn dfs
   "Lazily depth-first explores from an ordered collection of starting states.
@@ -146,6 +268,22 @@
   treated as leaves. Visits sharing the selected :visit-key are reported and
   expanded only on their first arrival. Each yielded visit contains :state.
 
+  :emit selects :enter (default), :exit, or :events. Entry and exit modes
+  return untagged visits in pre-order and post-order respectively.
+  With :emit :events, emits two snapshots per accepted visit, tagged with
+  :phase :enter and :phase :exit. Entry precedes successor generation; exit
+  follows handling the successors under deduplication and pruning rules.
+  Back edges to active visits are skipped, so exit does not imply that every
+  successor has exited on a cyclic graph. Pruned visits also enter and exit.
+  Filter :enter for pre-order or :exit for post-order.
+  :phase is reserved in event output. It is not passed to extensions, the
+  space, :expand?, or :visit-key; route context and identity are unchanged.
+  An infinite descending branch may produce entries forever without exits.
+  Optional :fold performs memoized bottom-up evaluation as in postorder.
+  It requires a non-nil :visit-key and :emit :exit or :emit :events.
+  Entry events have no computed :value; exits carry the finished :value.
+  Fold initialization is deferred until consumption resumes after entry.
+
   Options may contain :project and :visit-key, both functions of the full visit
   map. :visit-key defaults to :state; set it to nil to disable deduplication.
   :decode-edge optionally maps each raw successor to a transition map
@@ -155,19 +293,20 @@
   maps. Callbacks must preserve :state. Custom context fields merge in
   extension order, with later fields replacing earlier ones; use namespaced
   keys for independently reusable extensions to avoid accidental collisions.
-  Postorder reserves :value for fold results and :via and :back-edge for
+  Folds reserve :value for results and :via and :back-edge for
   successor views.
   :start and :next prepare candidates before duplicate or path-repeat
   rejection, so they may run for visits that are never emitted. Prefer pure
   callbacks; use result consumption for actions on emitted visits.
-  Inputs are the caller's responsibility and are not validated; violating
-  these expectations may produce unexpected results."
+  Invalid output modes and unsupported fold combinations throw ExceptionInfo
+  when called. Unused options are ignored. Data and callback contracts are
+  the caller's responsibility and are not validated."
   ([space starts]
    (dfs space starts {}))
   ([space starts options]
-   (depth-first space starts
-                (search-options options)
-                nil)))
+   (let [output (search-output :dfs options [:enter :exit :events])]
+     (check-fold :dfs options output)
+     (depth-first space starts (search-options options) nil output (:fold options)))))
 
 (defn- reject-repeated-keys
   "Refinement for simple paths: a candidate whose identity already occurs on
@@ -191,51 +330,87 @@
   for the route of states or trail-extension for the route with edge data.
   Visits are yielded for every path prefix; select goals with ordinary
   sequence functions, and return nil from the space to end a path at a goal.
+  :emit selects :enter (default), :exit, or :events, as in dfs, for each
+  accepted path occurrence rather than each globally distinct key.
+  Exit mode gives post-order over path occurrences. :fold is ignored:
+  shared-key memoization is different from occurrence-based evaluation.
+  Output-mode checks and unused-option handling are as in dfs.
   Enumeration is depth-first, so infinite searches need not be fair."
   ([space starts]
    (simple-paths space starts {}))
   ([space starts options]
-   (let [{:keys [visit-key] :as opts} (search-options options)]
+   (let [output (search-output :simple-paths options [:enter :exit :events])
+         {:keys [visit-key] :as opts} (search-options options)]
      (depth-first space starts (assoc opts :visit-key nil)
                   (when visit-key
-                    (reject-repeated-keys visit-key))))))
+                    (reject-repeated-keys visit-key))
+                  output
+                  nil))))
 
 (defn bfs
   "Lazily breadth-first explores from an ordered collection of starting states.
 
-  Space and options are the same as in dfs. In a static space, each equal
-  state is reported once at its minimum edge-count depth. Add depth-extension
+  Space and route options are the same as in dfs. :emit is :enter (default)
+  or :events; exit-only output throws ExceptionInfo when called.
+  Unused options, including :fold, are ignored.
+  Events carry :phase :enter when a visit is accepted, and :phase :expand
+  after all of its outgoing transitions have been handled. Expansion does
+  not mean descendants have finished and does not give post-order.
+  Successor entries can precede their parent's expansion event. An infinite
+  successor collection can produce entries forever without that event.
+  A pruned visit also gets an expansion event, without calling the space.
+  Phases are output-only, not callback inputs or visit identity.
+  In a static space, each equal state is reported once at its minimum
+  edge-count depth. Add depth-extension
   to include edge-count depth. Successor generation is deferred until its
   frontier chunk is needed. An infinite current level can produce visits
   indefinitely but prevents deeper levels from being reached."
   ([space starts]
    (bfs space starts {}))
   ([space starts options]
-   (let [{:keys [visit-key] :as opts} (search-options options)]
-     (explore space opts nil
-              (when visit-key #{})
-              (frontier/queue-push (frontier/queue) (start-visits opts starts))
-              frontier/queue-pop
-              frontier/queue-push))))
+   (let [output (search-output :bfs options [:enter :events])
+         {:keys [visit-key] :as opts} (search-options options)
+         starts (start-visits opts starts)]
+     (if (= output :events)
+       (breadth-first-events
+        space opts (when visit-key #{})
+        (frontier/queue-push (frontier/queue) (map-lazy #(vector :enter %) starts)))
+       (explore space opts nil (when visit-key #{})
+                (frontier/queue-push (frontier/queue) starts)
+                frontier/queue-pop frontier/queue-push)))))
 
 (defn postorder
   "Lazily returns visits in depth-first post-order.
 
   Successors precede their parents; shared keys are evaluated once. Back
   edges are not followed, so finite graphs terminate even with cycles.
-  The order is topological only for a DAG. Options are as in dfs;
-  :visit-key must not be nil.
+  The order is topological only for a DAG. Route options are as in dfs.
+
+  This is the exit view of the shared DFS lifecycle, without :phase tags;
+  equivalent to dfs with :emit :exit, including optional :fold evaluation.
+  :emit is ignored here; use dfs to select another output.
+  Without a fold, :visit-key nil visits each occurrence, as in dfs.
 
   Optional :fold computes a :value on each completed visit. It is a map:
     :init   (visit -> accumulator), required
     :step   (accumulator successor-view -> accumulator), required
     :finish (accumulator -> value), defaults to identity.
+    :descend (accumulator transition child -> context-map), optional.
   Each newly entered key gets its own accumulator. :step runs once per
   examined edge in successor order, including edges to cached visits. A
   successor view has :state, route context, its completed :value, :via (the
   transition from this parent), and :back-edge. An unfinished back-edge view
   has no :value; the step must handle it explicitly. Use propagate for cyclic
   fixed points.
+
+  :descend adds or replaces child context after route extensions and before
+  computing its visit key. It sees the parent's current accumulator, including
+  earlier siblings' results, and runs once per examined edge, even for cached
+  children. It must preserve :state and the reserved fields. It does not run
+  for starts; initialize their context with a :start extension. Descended
+  context affecting results must be included in :visit-key, just like route
+  context. Alpha-beta cutoffs produce bounds, not necessarily exact values;
+  do not reuse them as exact results under another window.
 
   Return (reduced accumulator) from :init or :step to finish this visit
   without requesting another successor. :finish receives the unwrapped
@@ -245,78 +420,21 @@
   but no further edge is decoded after reduction stops.
 
   Accumulators are private to parent frames: they are not route context and
-  are not passed to :next or the space. Children are not collected; accumulate
+  are not passed to :next or the space. Only :descend explicitly exposes
+  selected fields to a child. Children are not collected; accumulate
   them explicitly if needed. The cache still retains completed visits.
   Extensions define only :start and :next, as in the other searches.
   :value, :via, and :back-edge are reserved and must not be extension fields.
   Keys must be stable and identify interchangeable computations, including
   any route context affecting expansion or the fold. Cached visits are not
   recomputed for a later arrival with the same key. These input contracts
-  are the caller's responsibility and are not validated."
+  are the caller's responsibility and are not validated. A fold with
+  :visit-key nil throws ExceptionInfo when called; unused options are ignored."
   ([space starts]
    (postorder space starts {}))
   ([space starts options]
-   (let [{:keys [decode-edge extensions prepare-visit visit-key] :as opts}
-         (search-options options)
-         fold (:fold options)
-         {:keys [init step] complete :finish
-          :or {complete identity}} fold]
-     (letfn [(fold-child [accumulator child transition]
-               (step accumulator
-                     (-> child
-                         (assoc :via transition)
-                         (assoc :back-edge (not (contains? child :value))))))
-             (walk [known pending]
-               (lazy-seq
-                (loop [known known, pending pending]
-                  (when-let [pending (seq pending)]
-                    (let [[kind visit key accumulator remaining awaiting] (first pending)
-                          pending (rest pending)]
-                      (case kind
-                        :enter
-                        (if (contains? known key)
-                          (recur known pending)
-                          (recur (assoc known key visit)
-                                 (cons [:continue visit key
-                                        (when fold (init visit))
-                                        (lazy-seq (successors-of space opts visit))
-                                        nil]
-                                       pending)))
-
-                        :continue
-                        (loop [accumulator
-                              (if (and fold awaiting)
-                                (let [[child-key transition] awaiting]
-                                  (fold-child accumulator (known child-key) transition))
-                                accumulator)
-                               remaining remaining]
-                          (if-let [remaining (when-not (reduced? accumulator)
-                                               (seq remaining))]
-                            (let [transition (decode-edge (first remaining))
-                                  child (prepare-visit visit transition)
-                                  child-key (visit-key child)]
-                              (if (contains? known child-key)
-                                (recur (if fold
-                                         (fold-child accumulator (known child-key) transition)
-                                         accumulator)
-                                       (rest remaining))
-                                (walk known
-                                      (cons [:enter child child-key]
-                                            (cons [:continue visit key accumulator
-                                                   (rest remaining) [child-key transition]]
-                                                  pending)))))
-                            (let [finished (if fold
-                                             (assoc visit :value
-                                                    (complete (unreduced accumulator)))
-                                             visit)]
-                              (cons finished
-                                    (walk (assoc known key finished)
-                                          pending)))))))))))]
-       (walk {}
-             (map-lazy (fn [state]
-                         (let [visit (initialize-visit extensions {:state state})]
-                           [:enter visit (visit-key visit)]))
-                       starts))))))
+   (check-fold :postorder options :exit)
+   (depth-first space starts (search-options options) nil :exit (:fold options))))
 
 (defn propagate
   "Lazily propagates and joins values through a state space.
@@ -352,7 +470,8 @@
   in the accumulated information. Termination depends on the state space and
   whether values stabilize. Every expanded state must produce finitely many
   transitions. These are caller assumptions, not runtime checks. Input map
-  iteration and successor order determine the order of intermediate results."
+  iteration and successor order determine the order of intermediate results.
+  Unused options, including :emit and :fold, are ignored."
   [space initial-values {:keys [bottom join] :as options}]
   (let [opts {:project (get options :project :state)
               :decode-edge (get options :decode-edge default-decode-edge)
@@ -438,8 +557,8 @@
   order. This default automatically enables distance-extension. Each
   successor is reached at unit cost unless :decode-edge decodes attributed
   successors to transition maps containing :state and an optional :weight.
-  Weights must be finite and non-negative for Dijkstra's guarantees. Options
-  are as in dfs, plus :priority, a function of the visit map (default
+  Weights must be finite and non-negative for Dijkstra's guarantees. Route
+  options are as in dfs, plus :priority, a function of the visit map (default
   :distance) that orders the search, e.g. distance plus a heuristic for A*,
   or an extension-provided edge weight for Prim's algorithm. Each visit key is
   settled at most once, at the best priority offered for that key before
@@ -457,6 +576,13 @@
   and edge costs bounded below by a positive value. :project and :visit-key
   receive a visit map containing :state and extension values, and :visit-key
   must not be nil.
+  :emit is :enter (default) or :events. Event mode adds :phase :enter when
+  a visit is selected and settled, then :phase :expand after its outgoing
+  transitions have been handled, before selecting the next visit. An
+  expansion is local, not completion of descendants or a post-order result.
+  Improved pending candidates do not emit entries until selected. Phases
+  never enter callbacks or identity functions. Invalid output modes throw
+  ExceptionInfo when called. Unused options, including :fold, are ignored.
   Starts and each expanded state's transitions must be finite. Each result
   contains :state and extension values. Starting states are consumed and
   initialized only when the result is consumed; all starts are queued before
@@ -464,12 +590,13 @@
   ([space starts]
    (best-first space starts {}))
   ([space starts options]
-   (let [priority (get options :priority :distance)
+   (let [output (search-output :best-first options [:enter :events])
+         priority (get options :priority :distance)
          options (if (= :distance priority)
                    (with-required options distance-extension)
                    options)
          {:keys [extensions visit-key] :as opts}
-         (assoc (search-options options) :priority priority)]
+         (assoc (search-options options) :priority priority :emit output)]
      (letfn [(search [queued settled queue order]
                (lazy-seq
                 (when (seq queue)
@@ -478,12 +605,15 @@
                         key (visit-key visit)
                         queued (dissoc queued key)
                         settled (conj settled key)]
-                    (cons visit
+                    (cons (if (= (:emit opts) :events) (assoc visit :phase :enter) visit)
                           (lazy-seq
                            (let [[queued queue order]
                                  (relax space opts visit settled
                                         [queued queue order])]
-                             (search queued settled queue order))))))))]
+                             (if (= (:emit opts) :events)
+                               (cons (assoc visit :phase :expand)
+                                     (search queued settled queue order))
+                               (search queued settled queue order)))))))))]
        (lazy-seq
         (let [[queued queue order]
               (reduce (fn [state start]
