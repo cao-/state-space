@@ -1015,6 +1015,67 @@ the full transitions along the selected route:
 
 The trail preserves edge data that a~state-only path would lose.
 
+\secc Find chargers almost as close as the nearest
+
+\noindent{\bf Problem.} An electric car at \code{:home} can drive these
+directed roads, in minutes: \code{:home} to \code{:a} (2) or \code{:b} (4);
+\code{:a} to \code{:charger-1} (3) or \code{:c} (4); \code{:b} to
+\code{:charger-2} (2); and \code{:c} to \code{:charger-3} (2). There are no
+other roads. Find the nearest charger, then list every charger at most 20\%
+farther away than it, so the driver can choose among nearly equivalent
+options. Avoid exploring roads beyond that threshold.
+
+\smallskip
+\noindent{\bf Try it.} Before the nearest charger is found, what distance
+limit should the search use?
+
+\smallskip
+\noindent{\bf Solution.} The limit is unknown until the first question has
+been answered. Keep the lazy best-first search in a~var and ask both
+questions of the same sequence:
+
+\begtt \hisyntax{clojure}
+(def charging-roads
+  {:home [[:a 2] [:b 4]]
+   :a    [[:charger-1 3] [:c 4]]
+   :b    [[:charger-2 2]]
+   :c    [[:charger-3 2]]})
+
+(def chargers #{:charger-1 :charger-2 :charger-3})
+
+(def charger-search
+  (ss/best-first charging-roads
+                 [:home]
+                 {:decode-edge (fn [[place minutes]]
+                                 {:state place :weight minutes})}))
+
+(def nearest
+  (first (filter (comp chargers :state) charger-search)))
+nearest
+;; => {:state :charger-1 :distance 5}
+\endtt
+
+Best-first visits places in increasing distance, so the first charger is
+the nearest. Its distance gives the limit for the second question. Ask the
+same search for chargers within that limit:
+
+\begtt \hisyntax{clojure}
+(->> charger-search
+     (take-while #(<= (:distance %) (* 1.2 (:distance nearest))))
+     (filter (comp chargers :state))
+     (mapv (juxt :state :distance)))
+;; => [[:charger-1 5] [:charger-2 6]]
+\endtt
+
+Because a~realized lazy sequence caches its items, the second query reads
+the visits already computed and continues from where the first stopped:
+\code{:home}, \code{:a}, and \code{:b} are not expanded again. It stops at \code{:charger-3}, the first visit beyond six
+minutes, without expanding it. One traversal pass could do the same only
+by hand-coding a~stateful loop that discovers the limit and switches its
+stopping rule. Here, both questions remain ordinary sequence operations.
+Holding the sequence retains its realized visits, so release it when no
+further questions are needed.
+
 \secc Two travelers meet as quickly as possible
 
 \noindent{\bf Problem.} Two travelers start in \code{:west} and
