@@ -15,10 +15,7 @@
 \sec Contents
 \maketoc
 
-This volume teaches state-space exploration through worked problems; you
-can start here without reading the user guide. Each example starts with a~
-problem, then models its states and transitions before applying an operation.
-Familiarity with ordinary Clojure functions and collections is assumed.
+These worked problems can be read independently of the user guide.
 
 To try the examples from the project directory, start a~REPL with
 \code{clojure -M}; the source directory is on the classpath. Load the library
@@ -28,25 +25,10 @@ with:
 (require '[state-space.core :as ss])
 \endtt
 
-Evaluate the examples in order in one REPL session, after loading
-\code{state-space.core} as shown above. The library supplies traversal or
-propagation behavior; ordinary Clojure functions model each problem and
-select its answers.
-
-Start with routes through a~building, then explore shortest routes,
-alternative routes, and bounded walks. Later groups develop richer states,
-weighted searches, context-dependent moves, bottom-up computations, and
-finally propagation through a~cycle. Each group starts with a~small use of
-its APIs before applying them to more involved problems.
+Evaluate the examples in order in one REPL session.
 
 For each problem, pause after reading the question and work out a~state
-representation and an approach before continuing to the solution. The
-solutions are written as runnable REPL examples.
-
-Many examples use \code{first} after \code{filter} to stop as soon as a~
-useful visit is found. Because the search results are lazy, this does not
-need to finish exploring the rest of the space. Examples that collect every
-answer, such as subset generation, intentionally consume the full result.
+representation and an approach before continuing to the solution.
 
 \sec Routes, distances, and alternatives
 
@@ -177,8 +159,7 @@ neighbours from the dictionary. BFS finds the shortest route:
 ;; => ["cold" "cord" "card" "ward" "warm"]
 \endtt
 
-The space is implicit, and lazy \code{filter} stops consuming BFS as soon as
-it reaches the goal. The dictionary is an ordered vector, so its order
+The dictionary is an ordered vector, so its order
 determines which of several shortest routes BFS returns first.
 
 \secc Find each cell's distance to the nearest zero
@@ -217,9 +198,6 @@ into a~map and arrange them back into rows:
       (range (count grid)))
 ;; => [[0 0 0] [0 1 0] [1 2 1]]
 \endtt
-
-The multiple starting states make each cell's first BFS arrival its distance
-to the nearest zero.
 
 \secc Browse links up to two clicks away
 
@@ -431,10 +409,6 @@ the index in the state tells us when all decisions have been made:
 ;;     [:a :b] [:a :b :d] [:a :b :c] [:a :b :c :d])
 \endtt
 
-The search state includes both the partial answer and how many choices have
-been considered. This lets DFS distinguish unfinished decisions from
-completed subsets.
-
 \secc Place eight queens without conflicts
 
 \noindent{\bf Problem.} Place eight queens on a~chessboard so that no two
@@ -465,10 +439,6 @@ then explores only safe partial boards:
                (ss/dfs queen-placements [[]])))
 ;; => 92
 \endtt
-
-The partial column vector is the search state. Pruning unsafe choices as
-soon as they appear avoids exploring complete boards that could never be
-solutions.
 
 \secc Make a~number from the fewest perfect squares
 
@@ -524,9 +494,6 @@ knight moves from a~square, then use BFS because every move has equal cost.
      :depth)
 ;; => 6
 \endtt
-
-The successor function generates only legal squares; no graph needs to be
-stored.
 
 \secc[jug-puzzle] Measure four litres with two jugs
 
@@ -654,8 +621,7 @@ on the board. Starting from \code{[4 1 3 0 2 5]}, find the fewest swaps
 that produce \code{[1 2 3 4 5 0]}.
 
 \smallskip
-\noindent{\bf Solution.} Represent the board as a~vector in row-major
-order. A~state is the whole board; generate successors by swapping the
+\noindent{\bf Solution.} A~state is the whole board; generate successors by swapping the
 blank with each adjacent position. BFS finds a~shortest solution:
 
 \begtt \hisyntax{clojure}
@@ -1123,7 +1089,7 @@ not Dijkstra's algorithm: the priority is the joining edge, not the
 cumulative distance from the start. The custom extension's \code{:start}
 initializes the root's priority; \code{:next} reads the parent and decoded
 transition to record the selected road. Both return fields to add to the
-visit; the unused visit arguments are written as \code{_}:
+visit:
 
 \begtt \hisyntax{clojure}
 (def roads
@@ -1393,11 +1359,6 @@ distinct automaton states at the same graph node separate:
   (mapv :label (rest (:trail route))))
 ;; => ["a" "b"]
 \endtt
-
-This expresses a~regular constraint on one route. It is not a~declarative
-graph-pattern query: matching patterns that bind several nodes and
-relationships together or impose subgraph-matching semantics may require a~
-different abstraction.
 
 \sec Computing after successors
 
@@ -1818,8 +1779,7 @@ values
 
 The two branches bring different requirements to the storefront, where set
 union combines them. Each service's value is the set of capabilities it
-inherits from its dependencies. The data is deliberately small; the same
-model can be used to inspect larger dependency graphs.
+inherits from its dependencies.
 
 \secc Analyze definitions around a~loop
 

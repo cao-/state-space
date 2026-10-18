@@ -20,8 +20,7 @@
 State-space is a~Clojure library for lazily exploring graphs and generated
 state spaces. Graph searches yield visits lazily: maps whose \code{:state}
 field contains a~value from the problem domain, with optional information
-about how that state was reached. The REPL displays these sequences
-directly; examples use \code{take} to bound infinite searches.
+about how that state was reached.
 
 To try the examples from the project directory, start a~REPL with
 \code{clojure -M}; the source directory is on the classpath. Load the library
@@ -76,8 +75,7 @@ returns an unordered collection, such as a~set or map, its iteration order
 may vary; that can change which of several equally good routes is found
 first. Use an ordered collection when a~particular tie-break is important.
 
-The simplest space is an adjacency map. Maps are callable in Clojure, so
-they can be passed directly:
+An adjacency map can be passed directly as the space:
 
 \begtt \hisyntax{clojure}
 (def graph
@@ -165,9 +163,7 @@ and returns fields to merge into it. \code{:next} receives the parent visit,
 the transition to the child, and the child visit being built; it returns
 fields to merge into the child.
 Without edge decoding, the transition is simply \code{\{:state child-state\}}.
-Underscored parameter names mark inputs this particular callback does not
-need. The callbacks themselves may be omitted when no work is needed at
-that stage.
+Callbacks may be omitted when no work is needed at that stage.
 
 Extensions run in order. Each callback sees the visit fields added by
 earlier extensions at that stage, and later results override same-named
@@ -220,9 +216,8 @@ depth extension when the edge-count depth is useful:
 ;;     {:state :goal :depth 2})
 \endtt
 
-To retrieve the shortest route, add the path extension, then use the standard
-Clojure combination \code{first} and \code{filter} to take the first matching
-visit. Since the search is lazy, it stops as soon as the goal is found:
+To retrieve the shortest route, add the path extension and select the first
+goal visit. The remaining search is not expanded:
 
 \begtt \hisyntax{clojure}
 (->> (ss/bfs routes [:start]
@@ -235,9 +230,6 @@ visit. Since the search is lazy, it stops as soon as the goal is found:
 
 If no goal is reachable and the search finishes, \code{first} returns
 \code{nil}. It cannot report failure if the remaining search runs forever.
-The library returns visits rather than accepting a~goal predicate, so the
-same sequence can be filtered, inspected, or collected with ordinary
-Clojure functions.
 
 All starting visits are at depth zero and are visited before any successors.
 BFS is lazy too. A~bounded prefix can be consumed even from an infinite
@@ -928,12 +920,9 @@ exhaustively validated at runtime.
 
 \sec Technical documentation
 
-This section explains the implementation in the order a~search uses it:
-visits and transitions, lazy frontiers, shared traversal, then the algorithms
-that need their own traversal rules. The code excerpts are taken directly from the runnable source files; those
-files remain the complete source of truth. The embedded Lua below locates
-named top-level Clojure forms and finds the current excerpt line numbers
-whenever OpTeX builds this document.
+This section follows the implementation from visits and transitions through
+frontiers and traversal loops. Code excerpts are included directly from the
+source files.
 
 \_newcount\sourcefirstline
 \_newcount\sourcelastline
