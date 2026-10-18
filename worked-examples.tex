@@ -247,11 +247,12 @@ links from visits at depth two, without excluding those pages from the result:
    :item [:reviews]
    :reviews []})
 
-(mapv (juxt :state :depth)
-      (ss/bfs website [:home]
-                  {:extensions [ss/depth-extension]
-                   :expand? #(< (:depth %) 2)}))
-;; => [[:home 0] [:about 1] [:shop 1] [:team 2] [:item 2]]
+(vec (ss/bfs website [:home]
+             {:extensions [ss/depth-extension]
+              :expand? #(< (:depth %) 2)}))
+;; => [{:state :home :depth 0} {:state :about :depth 1}
+;;     {:state :shop :depth 1} {:state :team :depth 2}
+;;     {:state :item :depth 2}]
 \endtt
 
 Visits are still deduplicated by \code{:state}: BFS guarantees that the first
@@ -268,11 +269,12 @@ Alternatively, let the space function read the full visit with
   (when (< depth 2)
     (website state)))
 
-(mapv (juxt :state :depth)
-      (ss/bfs website-links [:home]
-                  {:project identity
-                   :extensions [ss/depth-extension]}))
-;; => [[:home 0] [:about 1] [:shop 1] [:team 2] [:item 2]]
+(vec (ss/bfs website-links [:home]
+             {:project identity
+              :extensions [ss/depth-extension]}))
+;; => [{:state :home :depth 0} {:state :about :depth 1}
+;;     {:state :shop :depth 1} {:state :team :depth 2}
+;;     {:state :item :depth 2}]
 \endtt
 
 Both versions return the same visits. Prefer \code{:expand?} for this
@@ -959,9 +961,9 @@ uses the accumulated distance to return the least-cost route:
                                         {:state state :weight weight})
                          :extensions [ss/path-extension]})
      (filter #(= :museum (:state %)))
-     first
-     (#(select-keys % [:path :distance])))
-;; => {:path [:home :park :village :hill :museum], :distance 6}
+     first)
+;; => {:state :museum
+;;     :path [:home :park :village :hill :museum], :distance 6}
 \endtt
 
 Unlike BFS, best-first minimizes the sum of edge costs, not the number of
@@ -1003,9 +1005,9 @@ the full transitions along the selected route:
                                          :mode mode})
                          :extensions [ss/trail-extension]})
      (filter #(= :museum (:state %)))
-     first
-     (#(select-keys % [:trail :distance])))
-;; => {:trail [{:state :home}
+     first)
+;; => {:state :museum
+;;     :trail [{:state :home}
 ;;             {:state :park, :weight 1, :mode :tram}
 ;;             {:state :village, :weight 1, :mode :foot}
 ;;             {:state :hill, :weight 2, :mode :coach}
@@ -1050,9 +1052,9 @@ each traveler independently:
                          :extensions [ss/path-extension]})
      (filter (fn [{[city-a city-b] :state}]
                (= city-a city-b)))
-     first
-     (#(select-keys % [:path :distance])))
-;; => {:path [[:west :east] [:ridge :market] [:town :town]]
+     first)
+;; => {:state [:town :town]
+;;     :path [[:west :east] [:ridge :market] [:town :town]]
 ;;     :distance 4}
 \endtt
 
@@ -1097,7 +1099,7 @@ so best-first returns the least-duration complete presentation:
                   [{:remaining required-topics :selected []}]
                   {:decode-edge identity}))))
 
-(select-keys presentation [:state :distance])
+presentation
 ;; => {:state {:remaining #{}
 ;;             :selected [:robot-navigation :short-welcome]}
 ;;     :distance 7}
@@ -1194,8 +1196,7 @@ the next transition's climb:
                          :extensions [effort-extension]
                          :priority :effort})
      (filter #(= [2 2] (:state %)))
-     first
-     (#(select-keys % [:state :effort])))
+     first)
 ;; => {:state [2 2], :effort 2}
 \endtt
 
@@ -1236,9 +1237,8 @@ time:
                                      (+ distance
                                         (remaining-time state)))})
      (filter #(= :goal (:state %)))
-     first
-     (#(select-keys % [:path :distance])))
-;; => {:path [:home :river :goal], :distance 4}
+     first)
+;; => {:state :goal, :path [:home :river :goal], :distance 4}
 \endtt
 
 The estimate guides the order of exploration; it does not change the route
@@ -1288,9 +1288,8 @@ accumulated Dijkstra distance is the arrival time:
                                         {:state state :weight weight})
                          :extensions [ss/path-extension]})
      (filter #(= :museum (:state %)))
-     first
-     (#(select-keys % [:path :distance])))
-;; => {:path [:home :junction :museum], :distance 20}
+     first)
+;; => {:state :museum, :path [:home :junction :museum], :distance 20}
 \endtt
 
 The scheduled edges are search-aware: whether a~trip is a~successor depends
@@ -1341,9 +1340,8 @@ same junction with different fuel is a~different search position.
                                  {:state state :fuel-used fuel-used})
                   :extensions [fuel-left ss/path-extension]})
      (filter #(= :goal (:state %)))
-     first
-     (#(select-keys % [:path :fuel-left])))
-;; => {:path [:home :detour :junction :goal], :fuel-left 0}
+     first)
+;; => {:state :goal, :path [:home :detour :junction :goal], :fuel-left 0}
 \endtt
 
 The direct arrival at \code{:junction} leaves too little fuel to continue.
@@ -1691,8 +1689,10 @@ step's start time to their total duration:
                          [:lunch]
                          {:extensions [prep-schedule]})
      (filter #(contains? % :starts-at))
-     (mapv (juxt :state :starts-at)))
-;; => [[:chop-vegetables 0] [:mix-dressing 4] [:plate-food 7]]
+     vec)
+;; => [{:state :chop-vegetables :starts-at 0}
+;;     {:state :mix-dressing :starts-at 4}
+;;     {:state :plate-food :starts-at 7}]
 \endtt
 
 The callback uses results from earlier siblings to initialize each next
@@ -1722,12 +1722,11 @@ restore visit stop requesting successors once a~completed source succeeds:
              {:source (:state (some #(when (:available? %) %) successors))}
              {:available? (contains? available-copies state)}))})
 
-(mapv #(select-keys % [:state :available? :source])
-      (ss/postorder {:restore [:local-copy :network-copy]
-                           :local-copy []
-                           :network-copy []}
-                          [:restore]
-                          {:extensions [restore-extension]}))
+(vec (ss/postorder {:restore [:local-copy :network-copy]
+                    :local-copy []
+                    :network-copy []}
+                   [:restore]
+                   {:extensions [restore-extension]}))
 ;; => [{:state :local-copy, :available? true}
 ;;     {:state :restore, :source :local-copy}]
 \endtt
@@ -1755,15 +1754,14 @@ edge to a~task still being explored:
                            [state (:kind via) back-edge])
                          successors)})})
 
-(mapv (juxt :state :edges)
-      (ss/postorder {:api [[:database :requires]]
-                           :database [[:api :requires]]}
-                          [:api]
-                          {:decode-edge (fn [[state kind]]
-                                          {:state state :kind kind})
-                           :extensions [edge-report]}))
-;; => [[:database [[:api :requires true]]]
-;;     [:api [[:database :requires false]]]]
+(vec (ss/postorder {:api [[:database :requires]]
+                    :database [[:api :requires]]}
+                   [:api]
+                   {:decode-edge (fn [[state kind]]
+                                   {:state state :kind kind})
+                    :extensions [edge-report]}))
+;; => [{:state :database :edges [[:api :requires true]]}
+;;     {:state :api :edges [[:database :requires false]]}]
 \endtt
 
 The edge from \code{:database} back to \code{:api} closes the cycle. The
