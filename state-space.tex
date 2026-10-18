@@ -32,10 +32,12 @@ with:
 \endtt
 
 The algorithm sections introduce the core searches in order. The later
-sections on visit identity, additional visit data, and termination are
-reference material. All public operations and options are explained here;
-the companion Worked examples PDF provides practice rather than required
-background. Evaluate this guide's snippets in order in one REPL session.
+sections on \ref[identity]{visit identity},
+\ref[transitions]{additional visit data}, and
+\ref[options]{termination} are reference material. All public operations
+and options are explained here; the companion Worked examples PDF provides
+practice rather than required background. Evaluate this guide's snippets in
+order in one REPL session.
 
 \secc Choosing an algorithm
 
@@ -327,7 +329,7 @@ successors and pruning the remaining ones. These \code{:exit} and
 \code{:more?} hooks are specific to post-order traversal; their examples
 appear in section~\ref[transitions]{Additional visit and transition data}.
 
-\secc State propagation
+\secc[propagation] State propagation
 
 \code{propagate} is a~different kind of graph computation: instead of
 discarding later arrivals at a~state, it joins their information and
@@ -409,9 +411,10 @@ the two facts above can only accumulate to a~fixed point, but arbitrary
 spaces and value domains need not stabilize. These are
 caller assumptions; the library does not validate them. Each expanded state
 must return a~finite successor collection. Ordinary shortest-path costs do
-not need this operation; the next section covers \code{best-first}.
+not need this operation; the next section covers
+\ref[best-first]{best-first search}.
 
-\secc Best-first search
+\secc[best-first] Best-first search
 
 \code{best-first} chooses the pending visit with the lowest priority.
 By default its \code{:distance} is the sum of transition weights, with each
@@ -817,10 +820,10 @@ field describes the edge from the current parent, even if a~different
 parent first reached that state. Bottom-up computations on a~DAG can reuse
 completed successor values this way. On a~cycle, a~back edge refers to an
 unfinished visit, so an exit callback must not assume every successor has
-its computed fields. Use propagation instead when information must
-circulate until it stabilizes. If a~result depends on its route, choose a~
-visit key that distinguishes the relevant context rather than reusing
-another route's result.
+its computed fields. Use \ref[propagation]{propagation} instead when
+information must circulate until it stabilizes. If a~result depends on its
+route, choose a~visit key that distinguishes the relevant context rather
+than reusing another route's result.
 
 For option defaults and termination behavior, see
 section~\ref[options]{Options and termination}.
@@ -829,7 +832,8 @@ section~\ref[options]{Options and termination}.
 
 The following options are common to the graph searches. Best-first also
 accepts \code{:priority}. Post-order traversal supports additional extension
-callbacks, described above.
+callbacks, described in
+\ref[transitions]{Additional visit and transition data}.
 
 \begitems
 * \code{:project} chooses what is passed to the space, applied to the full
@@ -1122,8 +1126,10 @@ works listed below.
   {{\it Artificial Intelligence: Foundations of Computational Agents},
   3rd~edition}, for its treatment of state-space search, planning, and
   problem representation.
-* Stuart Russell and Peter Norvig, {\it Artificial Intelligence: A Modern
-  Approach}, 3rd~edition (2010), and the
+* Stuart Russell and Peter Norvig,
+  \ulink[https://aima.cs.berkeley.edu/3rd-ed/]
+  {{\it Artificial Intelligence: A Modern Approach}, 3rd~edition (2010)},
+  and the
   \ulink[https://aimacode.github.io/aima-exercises/]{AIMA exercises}, for
   problems and concepts used to examine the scope of the search model.
 * The \ulink[https://leetcode.com/problemset/]{LeetCode problem collection},

@@ -277,7 +277,8 @@ Alternatively, let the space function read the full visit with
 
 Both versions return the same visits. Prefer \code{:expand?} for this
 cutoff; a~search-aware space becomes useful when context changes which
-successors are available, as in the scheduled-connection problem later.
+successors are available, as in
+\ref[scheduled-connection]{Catch a~scheduled connection} later.
 
 \secc List all routes without repeating a~place
 
@@ -527,7 +528,7 @@ knight moves from a~square, then use BFS because every move has equal cost.
 The successor function generates only legal squares; no graph needs to be
 stored.
 
-\secc Measure four litres with two jugs
+\secc[jug-puzzle] Measure four litres with two jugs
 
 \noindent{\bf Problem.} You have an unmarked three-litre jug and an unmarked
 five-litre jug, both initially empty. You may fill either jug completely
@@ -683,9 +684,9 @@ blank with each adjacent position. BFS finds a~shortest solution:
 ;;     [1 2 3 4 5 0]]
 \endtt
 
-The path contains four swaps. Unlike the jug puzzle, here each move changes
-the arrangement of the whole state rather than quantities in separate
-containers.
+The path contains four swaps. Unlike the \ref[jug-puzzle]{jug puzzle}, here
+each move changes the arrangement of the whole state rather than quantities
+in separate containers.
 
 \secc Push a~box to its goal
 
@@ -1255,7 +1256,7 @@ Now the moves available depend on arrival time, fuel, or progress through
 a~label pattern. Compare carrying that information in visits with making it
 part of the state itself.
 
-\secc Catch a~scheduled connection
+\secc[scheduled-connection] Catch a~scheduled connection
 
 \noindent{\bf Problem.} A~traveler leaves \code{:home} at 8:00. A~bus
 reaches \code{:junction} at 8:10 and another reaches \code{:museum} directly
