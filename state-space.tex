@@ -511,9 +511,11 @@ Best-first requires a~finite collection of starting states and finite
 successor collections for each expanded visit. The default distance priority
 automatically includes \code{distance-extension}; custom priorities do not.
 
-Best-first is lazy as well. With the default distance priority, visits are
-emitted in nondecreasing cost order. A~finite prefix can be consumed even
-when the search space is infinite:
+Best-first is lazy as well. Starting states are consumed and initialized
+only when the result is consumed; all starts are queued before selecting
+the first visit. With the default distance priority, visits are emitted in
+nondecreasing cost order. A~finite prefix can be consumed even when the
+search space is infinite:
 
 \begtt \hisyntax{clojure}
 (mapv :state

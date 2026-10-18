@@ -369,6 +369,43 @@
                                           [0])))))
     (is (= [0 1 2] @expanded))))
 
+(deftest best-first-defers-starts-until-consumption-and-queues-them-all
+  (let [consumed (atom [])
+        initialized (atom [])
+        expanded (atom [])
+        starts (map (fn [state]
+                      (swap! consumed conj state)
+                      state)
+                    [5 1 3])
+        visits (search/best-first
+                (fn [state] (swap! expanded conj state) [])
+                starts
+                {:extensions [{:start (fn [visit]
+                                        (swap! initialized conj (:state visit))
+                                        {})}]
+                 :priority :state})]
+    (is (empty? @consumed))
+    (is (empty? @initialized))
+    (is (empty? @expanded))
+    (is (= {:state 1} (first visits)))
+    (is (= [5 1 3] @consumed))
+    (is (= [5 1 3] @initialized))
+    (is (empty? @expanded))
+    (is (= [1 3 5] (mapv :state visits)))
+    (is (= [5 1 3] @initialized))
+    (is (= [1 3 5] @expanded))))
+
+(deftest best-first-defers-start-callback-errors-until-consumption
+  (let [error (ex-info "Start initialization failed" {})
+        visits (search/best-first
+                {} [:start]
+                {:extensions [{:start (fn [_] (throw error))}]})]
+    (is (identical? error
+                    (try
+                      (first visits)
+                      (catch clojure.lang.ExceptionInfo actual
+                        actual))))))
+
 (deftest best-first-can-use-a-consistent-heuristic
   (let [roads {:home [[:hill 1] [:river 2]]
                :hill [[:goal 5]]

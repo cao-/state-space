@@ -468,7 +468,9 @@
   receive a visit map containing :state and extension values, and :visit-key
   must not be nil.
   Starts and each expanded state's transitions must be finite. Each result
-  contains :state and extension values."
+  contains :state and extension values. Starting states are consumed and
+  initialized only when the result is consumed; all starts are queued before
+  the first visit is selected."
   ([space starts]
    (best-first space starts {}))
   ([space starts options]
@@ -500,10 +502,11 @@
                                      (relax space opts visit settled
                                             [best queue order])]
                                  (search best settled queue order))))))))))]
-       (let [[best queue order]
-             (reduce (fn [state start]
-                       (enqueue opts (initialize-visit extensions {:state start})
-                                #{} state))
-                     [{} (sorted-map) 0]
-                     starts)]
-         (search best #{} queue order))))))
+       (lazy-seq
+        (let [[best queue order]
+              (reduce (fn [state start]
+                        (enqueue opts (initialize-visit extensions {:state start})
+                                 #{} state))
+                      [{} (sorted-map) 0]
+                      starts)]
+          (search best #{} queue order)))))))
