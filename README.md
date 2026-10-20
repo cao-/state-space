@@ -32,6 +32,8 @@ machinery:
 
 ## Installation
 
+The library requires Java 21 or newer. CI tests on Java 21 and Java 25.
+
 Add the library to your `deps.edn` dependencies:
 
 ```clojure
@@ -280,3 +282,9 @@ folds with entry-only output throw `ExceptionInfo` when called. Unused
 options are ignored, including `:emit` on fixed-output operations and
 `:fold` on operations without folding. Traversal callbacks remain lazy;
 data and callback contracts are the caller's responsibility, not validated.
+
+## Benchmarks
+
+Run `clojure -M:bench` for library benchmarks or
+`clojure -M:bench-standard` to compare with direct Clojure solutions. The
+benchmark files document commands and workload details.

@@ -304,6 +304,7 @@
            [search/bfs {:emit nil} :emit]
            [search/best-first {:emit :exit} :emit]
            [search/best-first {:emit nil} :emit]
+           [search/best-first {:visit-key nil} :visit-key]
            [search/postorder {:fold {} :visit-key nil} :visit-key]]]
     (let [error (try
                   (algorithm {} [:root] options)
@@ -348,15 +349,43 @@
            [search/simple-paths {:emit :unknown}]
            [search/bfs {:emit :exit}]
            [search/best-first {:emit :exit}]
+           [search/best-first {:visit-key nil}]
            [search/dfs {:fold {}}]
            [search/dfs {:emit :events :fold {} :visit-key nil}]
            [search/postorder {:fold {} :visit-key nil}]]]
     (let [calls (atom [])
           options (assoc options :extensions
-                         [{:start (fn [_] (swap! calls conj :start) {})}])]
+                         [{:start (fn [_]
+                                    (swap! calls conj :start)
+                                    {})}])]
       (is (thrown? clojure.lang.ExceptionInfo
                    (algorithm (fn [_] (swap! calls conj :space) []) [:root] options)))
       (is (empty? @calls)))))
+
+(deftest propagate-validates-required-options-before-processing
+  (doseq [[options expected-option]
+          [[{:bottom 0} :join]
+           [{:join max} :bottom]
+           [{:bottom 0 :join nil} :join]]]
+    (let [calls (atom [])
+          error (try
+                  (search/propagate (fn [_] (swap! calls conj :space) [])
+                                    {:root 1}
+                                    options)
+                  nil
+                  (catch clojure.lang.ExceptionInfo error error))]
+      (is (= expected-option (:option (ex-data error))))
+      (is (= :propagate (:algorithm (ex-data error))))
+      (is (empty? @calls))))
+  (testing "nil is a valid bottom value when the option is present"
+    (let [progress (search/propagate
+                    {:root [{:state :leaf :value :fact}]}
+                    {:root :initial}
+                    {:decode-edge identity
+                     :bottom nil
+                     :join (fn [current contribution]
+                             (or current contribution))})]
+      (is (= {:root :initial :leaf :fact} (:values (last progress)))))))
 
 (deftest dfs-lifecycle-matches-a-reference-on-every-three-state-graph
   (letfn [(reference [graph starts]
@@ -618,7 +647,7 @@
                             [search/depth-extension
                              {:next (fn [parent edge candidate]
                                       (swap! observed conj [parent edge candidate])
-                                      {:from (:state parent)})}]}
+                                     {:from (:state parent)})}]}
                      attributed? (assoc :decode-edge identity)
                      (= algorithm search/best-first) (assoc :priority (constantly 0)))))]
       (is (= [[{:state :root :depth 0}
@@ -1609,6 +1638,23 @@
            (vec (search/dfs {:a [:b] :b []}
                             [:a]
                             {:extensions [steps-extension]}))))))
+
+(deftest modified-built-in-extensions-use-their-replaced-callbacks
+  (let [depth-extension
+        (assoc search/depth-extension
+               :next (fn [parent _transition _visit]
+                       {:depth (+ 10 (:depth parent))}))]
+    (is (= [{:state :a :depth 0}
+            {:state :b :depth 10}]
+           (vec (search/dfs {:a [:b] :b []}
+                            [:a]
+                            {:extensions [depth-extension]})))))
+  (is (= [{:state :a :depth 0}
+          {:state :b :depth 1}]
+         (vec (search/dfs {:a [:b] :b []}
+                          [:a]
+                          {:decode-edge (fn [state] {:state state})
+                           :extensions [search/depth-extension]})))))
 
 (deftest start-callbacks-run-before-duplicate-start-rejection
   (doseq [algorithm [search/dfs search/bfs search/postorder search/best-first]]

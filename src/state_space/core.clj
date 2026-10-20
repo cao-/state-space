@@ -1,17 +1,17 @@
 (ns state-space.core
   (:require [state-space.internal.frontier :as frontier]))
 
-(defn- initialize-visit [extensions visit]
-  (reduce (fn [visit {:keys [start]}]
-            (if start (reduce-kv assoc visit (start visit)) visit))
+(defn- initialize-visit [start-callbacks visit]
+  (reduce (fn [visit start]
+            (reduce-kv assoc visit (start visit)))
           visit
-          extensions))
+          start-callbacks))
 
-(defn- extend-visit [extensions parent transition visit]
-  (reduce (fn [visit {:keys [next]}]
-            (if next (reduce-kv assoc visit (next parent transition visit)) visit))
+(defn- extend-visit [next-callbacks parent transition visit]
+  (reduce (fn [visit next]
+            (reduce-kv assoc visit (next parent transition visit)))
           visit
-          extensions))
+          next-callbacks))
 
 (defn accumulate
   "Builds an extension that carries one value along every route under key k.
@@ -67,25 +67,19 @@
 (defn- default-decode-edge [successor]
   {:state successor})
 
-(defn- visit-preparer
-  "Selects base-visit construction and extension application once per search."
-  [{:keys [decode-edge extensions]}]
-  (let [base-visit (if (identical? decode-edge default-decode-edge)
-                     identity
-                     (fn [transition] {:state (:state transition)}))]
-    (if (seq extensions)
-      (fn [parent transition]
-        (extend-visit extensions parent transition (base-visit transition)))
-      (fn [_parent transition]
-        (base-visit transition)))))
-
 (defn- search-options [options]
-  (let [opts {:project (get options :project :state)
+  (let [extensions (vec (get options :extensions []))
+        opts {:project (get options :project :state)
               :decode-edge (get options :decode-edge default-decode-edge)
-              :extensions (vec (get options :extensions []))
               :visit-key (get options :visit-key :state)
-              :expand? (get options :expand? (constantly true))}]
-    (assoc opts :prepare-visit (visit-preparer opts))))
+              :expand? (get options :expand? (constantly true))}
+        start-callbacks (into [] (keep :start) extensions)
+        next-callbacks (into [] (keep :next) extensions)]
+    (assoc opts
+           :start-callbacks start-callbacks
+           :prepare-visit (fn [parent transition]
+                            (extend-visit next-callbacks parent transition
+                                          {:state (:state transition)})))))
 
 (defn- search-output [algorithm options allowed]
   (let [output (get options :emit :enter)]
@@ -104,6 +98,18 @@
       (throw (ex-info "A fold requires :emit :exit or :emit :events."
                       {:algorithm algorithm :option :emit :value output})))))
 
+(defn- check-present-option [algorithm options option]
+  (when-not (contains? options option)
+    (throw (ex-info (str (name algorithm) " requires "
+                         (pr-str option) " to be present.")
+                    {:algorithm algorithm :option option}))))
+
+(defn- check-non-nil-option [algorithm option value]
+  (when (nil? value)
+    (throw (ex-info (str (name algorithm) " requires a non-nil "
+                         (pr-str option) ".")
+                    {:algorithm algorithm :option option :value value}))))
+
 (defn- map-lazy
   "Unlike chunked map, invokes f only for the requested item."
   [f items]
@@ -112,8 +118,8 @@
      (cons (f (first items))
            (map-lazy f (rest items))))))
 
-(defn- start-visits [{:keys [extensions]} starts]
-  (map-lazy #(initialize-visit extensions {:state %}) starts))
+(defn- start-visits [{:keys [start-callbacks]} starts]
+  (map-lazy #(initialize-visit start-callbacks {:state %}) starts))
 
 (defn- explore
   "Preorder traversal over lazy frontier chunks; stack or queue defines order."
@@ -121,7 +127,7 @@
    visited pending pop-item push-chunk]
   (lazy-seq
    (loop [visited visited, pending pending]
-     (when-let [{:keys [item frontier]} (pop-item pending)]
+     (when-let [[item frontier] (pop-item pending)]
        (let [visit item
              key (when visit-key (visit-key visit))]
          (if (and visit-key (contains? visited key))
@@ -144,7 +150,7 @@
   (lazy-seq
    (loop [visited visited
           pending pending]
-     (when-let [{:keys [item frontier]} (frontier/queue-pop pending)]
+     (when-let [[item frontier] (frontier/queue-pop pending)]
        (let [[kind visit] item
              key (when (and visit-key (= kind :enter)) (visit-key visit))]
          (cond
@@ -171,84 +177,90 @@
 
 (defn- depth-first-complete
   "DFS return tracking for exit/event output and optional bottom-up evaluation.
-  Route visits stay phase-free; only emitted event snapshots carry :phase."
+  Route visits stay phase-free; only emitted event snapshots carry :phase.
+
+  The active visit is held in loop locals; suspended ancestors are stacked in
+  frames as [visit key accumulator remaining-successors transition-to-child].
+  Unconsumed starting states are kept apart and entered once frames are empty."
   [space starts {:keys [decode-edge prepare-visit visit-key] :as opts}
    refine output fold]
   (let [{:keys [init step descend] complete :finish
-         :or {complete identity}} fold]
-    (letfn [(fold-child [accumulator child transition]
+         :or {complete identity}} fold
+        events? (= output :events)]
+    (letfn [(remember [known key visit]
+              (cond fold (assoc known key visit)
+                    visit-key (conj known key)
+                    :else known))
+            (fold-child [accumulator child transition]
               (step accumulator
                     (-> child
                         (assoc :via transition)
                         (assoc :back-edge (not (contains? child :value))))))
-            (continue-visit [visit key pending]
-              (cons [:continue visit key
-                     (when fold (init visit))
-                     (lazy-seq (successors-of space opts visit))
-                     nil]
-                    pending))
-            (walk [known pending]
-              (lazy-seq
-               (loop [known known, pending pending]
-                 (when-let [pending (seq pending)]
-                   (let [[kind visit key accumulator remaining awaiting] (first pending)
-                         pending (rest pending)]
-                     (case kind
-                       :enter
-                       (if (and visit-key (contains? known key))
-                         (recur known pending)
-                         (let [known (cond fold (assoc known key visit)
-                                           visit-key (conj known key)
-                                           :else known)]
-                           (if (= output :exit)
-                             (recur known (continue-visit visit key pending))
-                             (cons (assoc visit :phase :enter)
-                                   (lazy-seq
-                                    (walk known (continue-visit visit key pending)))))))
+            (open [known visit key frames starts]
+              (walk known visit key
+                    (when fold (init visit))
+                    (lazy-seq (successors-of space opts visit))
+                    frames starts))
+            (enter [known visit key frames starts]
+              (let [known (remember known key visit)]
+                (if events?
+                  (cons (assoc visit :phase :enter)
+                        (lazy-seq (open known visit key frames starts)))
+                  (open known visit key frames starts))))
+            (next-start [known starts]
+              (loop [starts starts]
+                (when-let [starts (seq starts)]
+                  (let [visit (initialize-visit (:start-callbacks opts)
+                                                {:state (first starts)})
+                        key (when visit-key (visit-key visit))]
+                    (if (and visit-key (contains? known key))
+                      (recur (rest starts))
+                      (enter known visit key () (rest starts)))))))
+            (resume [known finished frames starts]
+              (if-let [[visit key accumulator remaining transition] (peek frames)]
+                (walk known visit key
+                      (if fold (fold-child accumulator finished transition) accumulator)
+                      remaining (pop frames) starts)
+                (next-start known starts)))
+            (walk [known visit key accumulator remaining frames starts]
+              (loop [known known, visit visit, key key
+                     accumulator accumulator, remaining remaining, frames frames]
+                (if-let [remaining (when-not (reduced? accumulator) (seq remaining))]
+                  (let [transition (decode-edge (first remaining))
+                        candidate (prepare-visit visit transition)
+                        candidate (if descend
+                                    (reduce-kv assoc candidate
+                                               (descend accumulator transition candidate))
+                                    candidate)
+                        child (if refine (refine visit candidate) candidate)
+                        child-key (when (and child visit-key) (visit-key child))]
+                    (cond
+                      (nil? child)
+                      (recur known visit key accumulator (rest remaining) frames)
 
-                       :continue
-                       (loop [accumulator
-                              (if (and fold awaiting)
-                                (let [[child-key transition] awaiting]
-                                  (fold-child accumulator (known child-key) transition))
-                                accumulator)
-                              remaining remaining]
-                         (if-let [remaining (when-not (reduced? accumulator)
-                                              (seq remaining))]
-                           (let [transition (decode-edge (first remaining))
-                                 candidate (prepare-visit visit transition)
-                                 candidate (if descend
-                                             (reduce-kv assoc candidate
-                                                        (descend accumulator transition candidate))
-                                             candidate)
-                                 child (if refine (refine visit candidate) candidate)
-                                 child-key (when (and child visit-key) (visit-key child))]
-                             (if (or (nil? child)
-                                     (and visit-key (contains? known child-key)))
-                               (recur (if (and fold child)
-                                        (fold-child accumulator (known child-key) transition)
-                                        accumulator)
-                                      (rest remaining))
-                               (walk known
-                                     (cons [:enter child child-key]
-                                           (cons [:continue visit key accumulator
-                                                  (rest remaining)
-                                                  (when fold [child-key transition])]
-                                                 pending)))))
-                           (let [finished (if fold
-                                            (assoc visit :value
-                                                   (complete (unreduced accumulator)))
-                                            visit)
-                                 known (if fold (assoc known key finished) known)]
-                             (cons (if (= output :events)
-                                     (assoc finished :phase :exit)
-                                     finished)
-                                   (walk known pending)))))))))))]
-      (walk (if fold {} (when visit-key #{}))
-            (map-lazy (fn [state]
-                        (let [visit (initialize-visit (:extensions opts) {:state state})]
-                          [:enter visit (when visit-key (visit-key visit))]))
-                      starts)))))
+                      (and visit-key (contains? known child-key))
+                      (recur known visit key
+                             (if fold
+                               (fold-child accumulator (known child-key) transition)
+                               accumulator)
+                             (rest remaining) frames)
+
+                      :else
+                      (let [frames (conj frames
+                                         [visit key accumulator (rest remaining) transition])]
+                        (if events?
+                          (enter known child child-key frames starts)
+                          (recur (remember known child-key child) child child-key
+                                 (when fold (init child))
+                                 (lazy-seq (successors-of space opts child))
+                                 frames)))))
+                  (let [finished (if fold
+                                   (assoc visit :value (complete (unreduced accumulator)))
+                                   visit)
+                        known (if fold (assoc known key finished) known)]
+                    (cons (if events? (assoc finished :phase :exit) finished)
+                          (lazy-seq (resume known finished frames starts)))))))]
+      (lazy-seq (next-start (if fold {} (when visit-key #{})) starts)))))
 
 (defn- depth-first [space starts {:keys [visit-key] :as opts} refine output fold]
   (if (= output :enter)
@@ -317,7 +329,8 @@
     (let [on-path (or (::path-keys (meta parent)) #{(visit-key parent)})
           key (visit-key candidate)]
       (when-not (contains? on-path key)
-        (vary-meta candidate assoc ::path-keys (conj on-path key))))))
+        (with-meta candidate
+          (assoc (meta candidate) ::path-keys (conj on-path key)))))))
 
 (defn simple-paths
   "Lazily enumerates every visit reached by a simple path, depth-first.
@@ -382,8 +395,10 @@
 (defn postorder
   "Lazily returns visits in depth-first post-order.
 
-  Successors precede their parents; shared keys are evaluated once. Back
-  edges are not followed, so finite graphs terminate even with cycles.
+  Successors precede their parents; shared keys are evaluated once. With a
+  visit key that identifies repeated states, back edges are not followed, so
+  finite graphs terminate even with cycles. Setting :visit-key nil disables
+  this cycle check; traversal of a cycle may then not terminate.
   The order is topological only for a DAG. Route options are as in dfs.
 
   This is the exit view of the shared DFS lifecycle, without :phase tags;
@@ -471,8 +486,11 @@
   whether values stabilize. Every expanded state must produce finitely many
   transitions. These are caller assumptions, not runtime checks. Input map
   iteration and successor order determine the order of intermediate results.
-  Unused options, including :emit and :fold, are ignored."
+  Unused options, including :emit and :fold, are ignored. A missing :bottom
+  or nil :join throws ExceptionInfo when called."
   [space initial-values {:keys [bottom join] :as options}]
+  (check-non-nil-option :propagate :join join)
+  (check-present-option :propagate options :bottom)
   (let [opts {:project (get options :project :state)
               :decode-edge (get options :decode-edge default-decode-edge)
               :expand? (get options :expand? (constantly true))}]
@@ -483,9 +501,9 @@
                        queue (pop queue)
                        pending (disj pending state)
                        visit {:state state :value (get values state)}
-                       result
+                       [values queue pending changes]
                        (reduce
-                        (fn [{:keys [values queue pending changes] :as result}
+                        (fn [[values queue pending changes :as result]
                              successor]
                           (let [transition ((:decode-edge opts) successor)
                                 state (:state transition)
@@ -496,24 +514,18 @@
                                 value (join previous contribution)]
                             (if (and (= previous value) (contains? values state))
                               result
-                              {:values (assoc values state value)
-                               :queue (if (contains? pending state)
-                                        queue
-                                        (conj queue state))
-                               :pending (conj pending state)
-                               :changes (conj changes
-                                              {:state state :value value})})))
-                        {:values values
-                         :queue queue
-                         :pending pending
-                         :changes []}
+                              [(assoc values state value)
+                               (if (contains? pending state)
+                                 queue
+                                 (conj queue state))
+                               (conj pending state)
+                               (conj changes {:state state :value value})])))
+                        [values queue pending []]
                         (successors-of space opts visit))]
-                   (cons {:values (:values result)
+                   (cons {:values values
                           :processed state
-                          :changes (:changes result)}
-                         (run (:values result)
-                              (:queue result)
-                              (:pending result)))))))]
+                          :changes changes}
+                         (run values queue pending))))))]
       (cons {:values initial-values
              :changes []}
             (lazy-seq
@@ -584,18 +596,21 @@
   never enter callbacks or identity functions. Invalid output modes throw
   ExceptionInfo when called. Unused options, including :fold, are ignored.
   Starts and each expanded state's transitions must be finite. Each result
-  contains :state and extension values. Starting states are consumed and
+  contains :state and extension values. A nil :visit-key throws ExceptionInfo
+  when called. Starting states are consumed and
   initialized only when the result is consumed; all starts are queued before
   the first visit is selected."
   ([space starts]
    (best-first space starts {}))
   ([space starts options]
    (let [output (search-output :best-first options [:enter :events])
+         _ (check-non-nil-option :best-first :visit-key
+                                 (get options :visit-key :state))
          priority (get options :priority :distance)
          options (if (= :distance priority)
                    (with-required options distance-extension)
                    options)
-         {:keys [extensions visit-key] :as opts}
+         {:keys [start-callbacks visit-key] :as opts}
          (assoc (search-options options) :priority priority :emit output)]
      (letfn [(search [queued settled queue order]
                (lazy-seq
@@ -617,7 +632,7 @@
        (lazy-seq
         (let [[queued queue order]
               (reduce (fn [state start]
-                        (enqueue opts (initialize-visit extensions {:state start})
+                        (enqueue opts (initialize-visit start-callbacks {:state start})
                                  #{} state))
                       [{} (sorted-map) 0]
                       starts)]

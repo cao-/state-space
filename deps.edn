@@ -3,6 +3,10 @@
  :aliases
  {:test {:extra-paths ["test"]
          :main-opts ["-m" "state-space.test-runner"]}
+  :bench {:extra-paths ["bench"]
+          :main-opts ["-m" "state-space.bench"]}
+  :bench-standard {:extra-paths ["bench"]
+                   :main-opts ["-m" "state-space.standard-bench"]}
   :build {:deps {io.github.clojure/tools.build {:mvn/version "0.10.14"}}
           :ns-default build}
   :deploy {:extra-deps {slipset/deps-deploy {:mvn/version "0.2.5"}}

@@ -5,7 +5,7 @@
 (defn- drain [pop-item initial-frontier]
   (loop [pending initial-frontier
          items []]
-    (if-let [{:keys [item frontier]} (pop-item pending)]
+    (if-let [[item frontier] (pop-item pending)]
       (recur frontier (conj items item))
       items)))
 
@@ -39,10 +39,10 @@
     (let [realized (atom [])
           chunk (observed-seq [1 2] realized)
           first-pop (pop-item (push empty-frontier chunk))]
-      (is (= 1 (:item first-pop)))
+      (is (= 1 (first first-pop)))
       (is (= [1] @realized))
-      (let [second-pop (pop-item (:frontier first-pop))]
-        (is (= 2 (:item second-pop)))
+      (let [second-pop (pop-item (second first-pop))]
+        (is (= 2 (first second-pop)))
         (is (= [1 2] @realized))))))
 
 (deftest frontiers-match-a-reference-under-interleaved-operations
@@ -64,8 +64,8 @@
             (let [result (pop-item pending)]
               (is (= (boolean (seq expected)) (some? result)))
               (when (seq expected)
-                (is (= (first expected) (:item result))))
-              (recur (if result (:frontier result) pending)
+                (is (= (first expected) (first result))))
+              (recur (if result (second result) pending)
                      (vec (rest expected))
                      (inc step)))))))))
 
