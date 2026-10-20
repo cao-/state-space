@@ -301,10 +301,11 @@
   :decode-edge optionally maps each raw successor to a transition map
   containing :state; DFS uses that destination. Ordered :extensions add
   derived visit values and can inspect all decoded transition fields.
-  Extensions are maps with :start and :next callbacks returning visit-context
-  maps. Callbacks must preserve :state. Custom context fields merge in
-  extension order, with later fields replacing earlier ones; use namespaced
-  keys for independently reusable extensions to avoid accidental collisions.
+  Extensions are maps with optional :start and :next callbacks returning
+  visit-context maps. Callbacks must preserve :state. Custom context fields
+  merge in extension order, with later fields replacing earlier ones; use
+  namespaced keys for independently reusable extensions to avoid accidental
+  collisions.
   Folds reserve :value for results and :via and :back-edge for
   successor views.
   :start and :next prepare candidates before duplicate or path-repeat
@@ -373,9 +374,9 @@
   successor collection can produce entries forever without that event.
   A pruned visit also gets an expansion event, without calling the space.
   Phases are output-only, not callback inputs or visit identity.
-  In a static space, each equal state is reported once at its minimum
-  edge-count depth. Add depth-extension
-  to include edge-count depth. Successor generation is deferred until its
+  With the default :visit-key :state, each state in a static space is reported
+  once at its minimum edge-count depth. Add depth-extension to include
+  edge-count depth. Successor generation is deferred until its
   frontier chunk is needed. An infinite current level can produce visits
   indefinitely but prevents deeper levels from being reached."
   ([space starts]
@@ -565,23 +566,28 @@
 (defn best-first
   "Lazily selects the lowest-priority pending visit, best-first.
 
-  By default the priority is :distance, giving Dijkstra's shortest-path
-  order. This default automatically enables distance-extension. Each
-  successor is reached at unit cost unless :decode-edge decodes attributed
+  :priority accepts a visit-map function or a keyword naming a visit field;
+  it defaults to :distance. The default, including explicit
+  :priority :distance, enables distance-extension and gives Dijkstra's
+  shortest-path order. Each successor is reached at unit cost unless
+  :decode-edge decodes attributed
   successors to transition maps containing :state and an optional :weight.
   Weights must be finite and non-negative for Dijkstra's guarantees. Route
-  options are as in dfs, plus :priority, a function of the visit map (default
-  :distance) that orders the search, e.g. distance plus a heuristic for A*,
-  or an extension-provided edge weight for Prim's algorithm. Each visit key is
-  settled at most once, at the best priority offered for that key before
-  settlement, so the priority must suit the problem (e.g. a consistent
-  heuristic for A*); that is the caller's responsibility. Newly discovered
-  candidates may have lower priorities than previously emitted visits, so
-  custom priorities do not generally produce globally sorted results.
-  A custom priority does not enable distance-extension; include it explicitly
-  when the priority or results need cumulative distance. Equal priorities are emitted FIFO in
-  enqueue order; this order depends on the iteration order of starts and
-  successors. On infinite spaces, finite non-negative weights alone do not
+  options are as in dfs. Other priorities, such as distance plus a heuristic
+  for A* or an extension-provided edge weight for Prim's algorithm, do not
+  automatically enable distance-extension; include it explicitly when the
+  priority or results need cumulative distance. User extensions run after
+  the required distance extension and can replace :distance, affecting the
+  default priority.
+  Each visit key is settled at most once, at the best priority offered for
+  that key before settlement, so the priority must suit the problem (e.g. a
+  consistent heuristic for A*); that is the caller's responsibility. Newly
+  discovered candidates may have lower priorities than previously emitted
+  visits, so custom priorities do not generally produce globally sorted
+  results.
+  Equal priorities are emitted FIFO in enqueue order; this order depends on
+  the iteration order of starts and successors. On infinite spaces, finite
+  non-negative weights alone do not
   guarantee that a positive-cost result will eventually be emitted: an
   infinite region of equal or lower priority can keep it pending. Standard A*
   guarantees require additional assumptions, including bounded branching

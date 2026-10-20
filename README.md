@@ -4,6 +4,10 @@ State-space exploration for Clojure, with depth-first, breadth-first,
 simple-path, post-order traversal, and best-first search plus worklist-based
 state propagation over explicit or generated state spaces.
 
+Searches return visits as lazy sequences, so you can inspect intermediate
+results and use ordinary Clojure sequence operations to select, transform,
+or consume only a prefix instead of requesting only a final answer.
+
 The [State-space documentation PDF](https://github.com/cao-/state-space/releases/latest/download/state-space.pdf)
 describes the algorithms and API. The companion
 [Worked examples PDF](https://github.com/cao-/state-space/releases/latest/download/worked-examples.pdf)
@@ -134,7 +138,8 @@ transition map with its destination and weight:
 By default, `best-first` adds cumulative `:distance` and uses it as the
 priority (Dijkstra's algorithm). The two-step route costs 5, less than the
 direct edge's 10. Weights must be finite and non-negative for this
-shortest-path guarantee.
+shortest-path guarantee. User extensions run afterward and can replace
+`:distance`, changing the default ordering.
 
 ## Bottom-up computations
 
@@ -286,5 +291,5 @@ data and callback contracts are the caller's responsibility, not validated.
 ## Benchmarks
 
 Run `clojure -M:bench` for library benchmarks or
-`clojure -M:bench-standard` to compare with direct Clojure solutions. The
+`clojure -M:standard-bench` to compare with direct Clojure solutions. The
 benchmark files document commands and workload details.

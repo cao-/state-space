@@ -18,9 +18,12 @@
 \sec User documentation
 
 State-space is a~Clojure library for lazily exploring graphs and generated
-state spaces. Graph searches yield visits lazily: maps whose \code{:state}
-field contains a~value from the problem domain, with optional information
-about how that state was reached.
+state spaces. Graph searches expose visits as lazy sequences: maps whose
+\code{:state} field contains a~value from the problem domain, with optional
+information about how that state was reached. You can inspect intermediate
+results and use ordinary Clojure sequence operations to select, transform,
+or consume only a~prefix of the search rather than requesting only a~final
+answer.
 
 To try the examples from the project directory, start a~REPL with
 \code{clojure -M}; the source directory is on the classpath. Load the library
@@ -486,13 +489,18 @@ defaulting to one when that field is absent:
 ;;     {:state :goal :distance 3} {:state :slow :distance 5})
 \endtt
 
-An optional \code{:priority} function can order visits by something other than
-distance, or add an estimate of the remaining cost as in
-\ulink[https://en.wikipedia.org/wiki/A*_search_algorithm]{A* search}. A custom
-priority does not automatically calculate \code{:distance}; include
+The optional \code{:priority} accepts a~function of the visit or a~keyword
+naming a~visit field. It defaults to \code{:distance}; that default, including
+explicitly passing \code{:priority :distance}, automatically adds
+\code{distance-extension} and gives Dijkstra's ordering. User extensions run
+after it and can replace \code{:distance}, changing that ordering. Other
+priorities do not automatically add \code{distance-extension}; include
 \code{ss/distance-extension} explicitly when the priority or results need
-it. For example, a~route planner can combine the cost already travelled with
-a~lower-bound estimate to the goal:
+cumulative distance. A~priority function can use another visit field or add
+an estimate of remaining cost as in
+\ulink[https://en.wikipedia.org/wiki/A*_search_algorithm]{A* search}. For
+example, a~route planner can combine the cost already travelled with a~
+lower-bound estimate to the goal:
 
 \begtt \hisyntax{clojure}
 (def roads {:home [[:hill 1] [:river 2]]
@@ -539,14 +547,13 @@ an admissible heuristic, and edge costs bounded below by a~positive value;
 with multiple-path pruning, consistency is also needed for the usual
 optimality guarantee.
 Best-first requires a~finite collection of starting states and finite
-successor collections for each expanded visit. The default distance priority
-automatically includes \code{distance-extension}; custom priorities do not.
+successor collections for each expanded visit.
 
 Best-first is lazy as well. Starting states are consumed and initialized
 only when the result is consumed; all starts are queued before selecting
-the first visit. With the default distance priority, visits are emitted in
-nondecreasing cost order. A~finite prefix can be consumed even when the
-search space is infinite:
+the first visit. When no later extension replaces \code{:distance}, the
+default priority emits visits in nondecreasing cost order. A~finite prefix
+can be consumed even when the search space is infinite:
 
 \begtt \hisyntax{clojure}
 (mapv :state
@@ -1082,11 +1089,12 @@ described in \ref[folds]{Bottom-up evaluation}.
 * BFS and best-first accept \code{:emit :enter} by default, or event
   output with \code{:emit :events}. Event phases are \code{:enter} and
   \code{:expand}, distinguishing local expansion from DFS return.
-* Best-first also accepts \code{:priority}, a~function of the visit that
-  determines queue order. It defaults to \code{:distance}, which automatically
-  enables \code{distance-extension}. A custom priority does not add
-  \code{:distance}; add \code{ss/distance-extension} to \code{:extensions}
-  if it needs cumulative distance. Priority values must be mutually comparable.
+* Best-first accepts \code{:priority}, a~visit function or field keyword.
+  It defaults to \code{:distance}, automatically enabling
+  \code{distance-extension}; explicitly passing \code{:priority :distance}
+  does the same. Other priorities do not add it. Extensions run first, so a~
+  later extension can replace \code{:distance} and affect the default order.
+  Priority values must be mutually comparable.
 * DFS and post-order traversal also accept \code{:fold}, a~map with required
   \code{:init} and \code{:step} functions and optional \code{:finish}
   and \code{:descend}.
@@ -1385,26 +1393,6 @@ after the pruning check, without an intermediate mapped sequence.
 \verbinput \hisyntax{clojure}\vitt{src/state_space/core.clj} (\the\sourcefirstline-\the\sourcelastline) src/state_space/core.clj
 \endgroup
 
-\secc Best-first traversal
-
-Best-first orders pending visits by priority, so it uses a~sorted map rather
-than BFS's chunk queue or DFS's lifecycle frames. \code{queued} records the queue position for
-each pending visit key; a better route replaces its previous queue entry,
-so only one candidate per key remains pending. \code{settled} ensures each key
-is emitted once. A monotonically increasing sequence number makes equal
-priorities stable in insertion order. The default cumulative-distance
-priority has Dijkstra's shortest-path behavior when edge weights are
-non-negative.
-Event output tags each selected visit on entry and emits its expansion
-snapshot after relaxation, before selecting another queue item.
-
-\begingroup
-\typosize[8/9]
-\ttline=-2
-\directlua{state_space_excerpt_range("src/state_space/core.clj", "best-first")}
-\verbinput \hisyntax{clojure}\vitt{src/state_space/core.clj} (\the\sourcefirstline-\the\sourcelastline) src/state_space/core.clj
-\endgroup
-
 \secc State propagation
 
 Propagation uses the same projected visits and decoded transitions as the
@@ -1419,6 +1407,26 @@ is yielded before any state is expanded.
 \typosize[8/9]
 \ttline=-2
 \directlua{state_space_excerpt_range("src/state_space/core.clj", "propagation")}
+\verbinput \hisyntax{clojure}\vitt{src/state_space/core.clj} (\the\sourcefirstline-\the\sourcelastline) src/state_space/core.clj
+\endgroup
+
+\secc Best-first traversal
+
+Best-first orders pending visits by priority, so it uses a~sorted map rather
+than BFS's chunk queue or DFS's lifecycle frames. \code{queued} records the
+queue position for each pending visit key; a better route replaces its
+previous queue entry, so only one candidate per key remains pending.
+\code{settled} ensures each key is emitted once. A monotonically increasing
+sequence number makes equal priorities stable in insertion order. The default
+cumulative-distance priority has Dijkstra's shortest-path behavior when edge
+weights are non-negative and no user extension replaces \code{:distance}.
+Event output tags each selected visit on entry and emits its expansion
+snapshot after relaxation, before selecting another queue item.
+
+\begingroup
+\typosize[8/9]
+\ttline=-2
+\directlua{state_space_excerpt_range("src/state_space/core.clj", "best-first")}
 \verbinput \hisyntax{clojure}\vitt{src/state_space/core.clj} (\the\sourcefirstline-\the\sourcelastline) src/state_space/core.clj
 \endgroup
 

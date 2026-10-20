@@ -1,6 +1,6 @@
 ;; Usage:
-;;   clojure -M:bench-standard
-;;   clojure -M:bench-standard --warmup N --samples N [--workload NAME]
+;;   clojure -M:standard-bench
+;;   clojure -M:standard-bench --warmup N --samples N [--workload NAME]
 ;; Compares scaled workloads with direct Clojure implementations, checks
 ;; result equality before timing, and reports median time and thread allocation.
 
@@ -531,7 +531,7 @@
 (defn -main [& args]
   (let [{:keys [help? warmup samples workload]} (parse-options args)]
     (if help?
-      (println "Run direct comparisons with clojure -M:bench-standard [--warmup N] [--samples N] [--workload NAME].")
+      (println "Run direct comparisons with clojure -M:standard-bench [--warmup N] [--samples N] [--workload NAME].")
       (do
         (println (format-line
                   "State-space vs direct Clojure comparisons (%d warmups, %d samples)"
