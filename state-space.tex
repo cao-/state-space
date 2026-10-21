@@ -188,8 +188,8 @@ for context, preferably namespaced keywords in independently reusable
 extensions to avoid accidental collisions. Bottom-up folding reserves
 \code{:value} for computed fold results, and \code{:via} and
 \code{:back-edge} for successor views;
-extensions must not use these as their own context fields.
-Event output also reserves \code{:phase} for traversal tags.
+extensions must not use these as their own context fields. Event tags live
+in the outer event envelope and do not alter visit context.
 These are caller expectations, not runtime checks; inputs that violate them
 may produce unexpected results.
 Section~\ref[transitions]{Route extensions and transition
@@ -951,13 +951,14 @@ Ordinary searches need no output options. For depth-first return order or
 tracing, \code{dfs} and \code{simple-paths} accept \code{:emit}, selecting
 \code{:enter} (the default), \code{:exit}, or \code{:events}.
 Entry and exit modes return untagged visits in pre-order and post-order
-respectively. Event mode exposes the traversal lifecycle: an
-\code{:enter} snapshot before requesting a~visit's successors and an
-\code{:exit} snapshot after handling them:
+respectively. Event mode returns a~lazy stream of event maps. A~\code{:visit}
+event contains a~\code{:phase} and nested \code{:visit} map. A~\code{:candidate}
+event describes a~start or decoded transition considered by the traversal:
 
 \begtt \hisyntax{clojure}
-(mapv (juxt :state :phase)
-      (ss/dfs {:root [:left :right]} [:root] {:emit :events}))
+(mapv (fn [{:keys [phase visit]}] [(:state visit) phase])
+      (filter #(= :visit (:event %))
+      (ss/dfs {:root [:left :right]} [:root] {:emit :events})))
 ;; => [[:root :enter] [:left :enter] [:left :exit]
 ;;     [:right :enter] [:right :exit] [:root :exit]]
 
@@ -972,24 +973,30 @@ gives the same visits without enabling a~fold:
 \begtt \hisyntax{clojure}
 (= (ss/postorder {:root [:left :right]} [:root])
    (->> (ss/dfs {:root [:left :right]} [:root] {:emit :events})
+        (filter #(= :visit (:event %)))
         (filter #(= :exit (:phase %)))
-        (map #(dissoc % :phase))))
+        (map :visit)))
 ;; => true
 \endtt
 
-Each accepted visit enters once and exits once if consumption reaches its
-completion. Duplicate arrivals produce neither event. With
+Candidate events contain \code{:origin :start} or \code{:origin :edge}, the
+candidate \code{:visit}, and \code{:disposition :scheduled} or
+\code{:disposition :discarded}. Edge candidates also include \code{:from} and
+\code{:transition}. A~discarded candidate has a~\code{:reason}. Each accepted
+visit enters once and exits once if consumption reaches its completion.
+With
 \code{:visit-key nil}, each occurrence has its own entry and exit.
 \code{simple-paths} supports all three outputs too, for each accepted path
 occurrence. Selecting \code{:emit :exit} keeps distinct routes to the same
-state separate. Both snapshots preserve route context; the reserved
-\code{:phase} field is added only to event output, never to extension,
-projection, expansion, or identity callback inputs. Do not use
-\code{:phase} as an extension field in event mode.
+state separate. Visit maps preserve route context and never receive event
+envelope fields; event data does not enter extension,
+projection, expansion, or identity callback inputs. A~visit may still use
+\code{:phase} as route context inside its nested \code{:visit} map.
 
 Exit follows the traversal's deduplication, cycle, and pruning rules.
 A~visit rejected by \code{:expand?} still enters and exits, without
-requesting successors. Back edges to active visits are skipped, so exit
+requesting successors. Back edges to active visits are rejected as candidate
+events, so exit
 does not promise every successor has exited.
 Stopping on entry does not request successors; stopping on exit need not
 inspect the next sibling. Early stopping can leave unmatched entries, and
@@ -1000,13 +1007,14 @@ DFS also accepts \code{:fold} with \code{:emit :exit} or
 \code{:emit :events}. Entries have no computed \code{:value}; exits publish
 the result. Fold initialization runs only when consumption resumes after
 entry. A~fold with entry-only output is rejected, since it would not expose
-results. Without a~fold, selecting entries recovers ordinary DFS visits
-after removing \code{:phase}; a~fold can additionally cut off siblings.
+results. Without a~fold, selecting entry visit events recovers ordinary DFS visits
+from their nested \code{:visit} maps; a~fold can additionally cut off siblings.
 This guarantees visit order and context, not identical callback timing:
 ordinary traversal may prepare a~chunk of candidates ahead.
 \code{simple-paths} ignores \code{:fold}: occurrence-based evaluation
 differs from shared-key memoization.
-\code{postorder} always selects exits and ignores \code{:emit}.
+\code{postorder} returns completed visits by default; \code{:emit :events}
+selects the same full event stream as DFS.
 
 To observe evaluation on descent as well as return, ask DFS for events.
 Using the earlier \code{subtree-size} fold, entries expose route visits
@@ -1015,44 +1023,58 @@ and exits additionally expose subtree sizes:
 \begtt \hisyntax{clojure}
 (vec (ss/dfs {:root [:leaf]} [:root]
             {:emit :events :fold subtree-size}))
-;; => [{:state :root :phase :enter}
-;;     {:state :leaf :phase :enter}
-;;     {:state :leaf :value 1 :phase :exit}
-;;     {:state :root :value 2 :phase :exit}]
+;; => [{:event :candidate, :origin :start, :visit {:state :root},
+;;      :disposition :scheduled}
+;;     {:event :visit, :phase :enter, :visit {:state :root}}
+;;     {:event :candidate, :origin :edge, :from {:state :root},
+;;      :transition {:state :leaf}, :visit {:state :leaf},
+;;      :disposition :scheduled}
+;;     {:event :visit, :phase :enter, :visit {:state :leaf}}
+;;     {:event :visit, :phase :exit, :visit {:state :leaf, :value 1}}
+;;     {:event :visit, :phase :exit, :visit {:state :root, :value 2}}]
 \endtt
 
 BFS and best-first also accept \code{:emit :events}. Across the searches,
 \code{:phase :enter} means an accepted visit has been selected for
 processing, before requesting its successors. Best-first settles the key
-at that point; a~candidate replaced while pending never emits an entry.
+at that point; a~candidate replaced while pending never emits a~visit event.
 Their completion event is \code{:phase :expand}, not DFS's
 \code{:phase :exit}. Expansion means only that the visit's immediate
 outgoing transitions have been handled. It does not promise completed
 descendants or a~bottom-up value:
 
 \begtt \hisyntax{clojure}
-(mapv (juxt :state :phase)
-      (ss/bfs {:root [:left :right]} [:root] {:emit :events}))
+(mapv (fn [{:keys [phase visit]}] [(:state visit) phase])
+      (filter #(= :visit (:event %))
+      (ss/bfs {:root [:left :right]} [:root] {:emit :events})))
 ;; => [[:root :enter] [:left :enter] [:right :enter]
 ;;     [:root :expand] [:left :expand] [:right :expand]]
 
-(mapv (juxt :state :phase)
-      (ss/best-first {:root [:left :right]} [:root] {:emit :events}))
+(mapv (fn [{:keys [phase visit]}] [(:state visit) phase])
+      (filter #(= :visit (:event %))
+      (ss/best-first {:root [:left :right]} [:root] {:emit :events})))
 ;; => [[:root :enter] [:root :expand] [:left :enter]
 ;;     [:left :expand] [:right :enter] [:right :expand]]
 \endtt
 
-BFS keeps lazy successor chunks: it can accept children before their
-parent's outgoing sequence is exhausted. Infinite starts can postpone all
-expansions, and an infinite outgoing sequence can produce entries forever
-without a~parent expansion event. Best-first consumes the whole finite
-successor collection before selecting the next visit, so its expansion
-event immediately follows its entry. Stopping on that expansion does not
-select the next visit. Neither algorithm reports expansion if a~callback
-throws before it finishes.
+BFS emits a~candidate event when a~start or successor is queued. Its
+\code{:disposition :scheduled} means the candidate entered the queue, not
+that it will necessarily be expanded: a~later \code{:skip} visit event
+records a~queued duplicate rejected when it reaches the front. BFS keeps
+lazy successor chunks, so it can schedule children before the parent's
+outgoing sequence is exhausted. Infinite starts can postpone all expansions,
+and an infinite outgoing sequence can produce candidate events forever
+without a~parent expansion event. Best-first emits each candidate event when
+it decides whether to enqueue, improve, or discard the candidate, then selects
+the next visit after the current expansion. Thus candidate events report the
+decision made at that point; later visit events report what happens when
+queued candidates are selected. Stopping on an expansion does not select the
+next visit. Neither algorithm reports expansion if a~callback throws before
+it finishes.
 
-Filtering entries and removing \code{:phase} recovers ordinary visits in
-the same order and with the same route context. Both searches also accept
+Filtering entry visit events and selecting their \code{:visit} maps recovers
+ordinary visits in the same order and with the same route context. Both
+searches also accept
 \code{:emit :enter} explicitly, their unchanged default. They reject
 \code{:emit :exit} but ignore \code{:fold}. Pruned visits still report local
 completion without calling the space. Event fields never enter callbacks
@@ -1084,11 +1106,20 @@ described in \ref[folds]{Bottom-up evaluation}.
   Memoized folds and best-first require a~non-\code{nil} key.
 * DFS and simple-path enumeration accept \code{:emit}: \code{:enter}
   (default) returns untagged entry visits; \code{:exit} returns untagged
-  completed visits; \code{:events} returns both, tagged with
-  \code{:phase :enter} or \code{:phase :exit}.
+  completed visits; \code{:events} returns a~stream of candidate and visit
+  event envelopes.
 * BFS and best-first accept \code{:emit :enter} by default, or event
-  output with \code{:emit :events}. Event phases are \code{:enter} and
-  \code{:expand}, distinguishing local expansion from DFS return.
+  output with \code{:emit :events}. Candidate events describe starts and
+  decoded transitions. BFS emits a~candidate event when it queues that
+  candidate; \code{:disposition :scheduled} means queued, not yet accepted.
+  When dequeued, it emits a~visit event with phase \code{:enter} or
+  \code{:skip}. Best-first emits the candidate event when it decides to
+  enqueue, improve, or discard it; selected visits emit \code{:enter},
+  followed by \code{:expand} after their outgoing transitions are handled.
+* \code{postorder} returns completed visits by default and accepts
+  \code{:emit :events} for the shared DFS event stream.
+* \code{propagate} accepts \code{:emit :events} to wrap each progress record
+  in an event envelope; its default output is unchanged.
 * Best-first accepts \code{:priority}, a~visit function or field keyword.
   It defaults to \code{:distance}, automatically enabling
   \code{distance-extension}; explicitly passing \code{:priority :distance}
@@ -1105,17 +1136,17 @@ described in \ref[folds]{Bottom-up evaluation}.
 \code{simple-paths} uses \code{:visit-key} to prevent repeats on each route,
 rather than to deduplicate the entire search.
 
-\code{propagate} uses \code{:project}, \code{:expand?}, and
-\code{:decode-edge}; \code{:bottom} and \code{:join} are required. Its map
+\code{propagate} uses \code{:project}, \code{:expand?}, \code{:decode-edge},
+and \code{:emit}; \code{:bottom} and \code{:join} are required. Its map
 keys identify states, so it does not use \code{:visit-key} or
 \code{:extensions}.
 
-Only supported execution modes are checked: invalid \code{:emit} values
-on operations with selectable output, folds with \code{:visit-key nil},
-and DFS folds with entry-only output throw \code{ExceptionInfo} when called,
-before traversal callbacks run. Unused options are ignored, including
-\code{:emit} on fixed-output operations and \code{:fold} on operations
-without folding. Data and callback contracts are the caller's
+Invalid \code{:emit} values on operations with selectable output, invalid
+propagation output, folds with \code{:visit-key nil}, and DFS folds with
+entry-only output throw \code{ExceptionInfo} when called, before traversal
+callbacks run. \code{postorder} recognizes only \code{:emit :events}; other
+\code{:emit} values are ignored. Unused options and \code{:fold} on
+operations without folding are ignored. Data and callback contracts are the caller's
 responsibility and are not validated.
 
 To exhaust a~result sequence after finitely many visits, the start collection
@@ -1221,7 +1252,7 @@ source files.
       if not prefix then return nil end
       local found
       for line_number, line in ipairs(lines) do
-        if line:sub(1, string.len(prefix)) == prefix then
+        if line == prefix then
           assert(not found, "duplicate source excerpt boundary: " .. prefix)
           found = line_number
         end
@@ -1333,12 +1364,14 @@ engine is shared by all depth-first exit/event modes and post-order.
 Explicit frames represent entering a~visit and resuming its parent; exit
 selection avoids constructing discarded event maps.
 
-BFS event mode uses \code{breadth-first-events}, a~small queue loop that
-wraps candidates with an operation tag and appends an expansion marker to
-each successor chunk. The separate loop keeps event branching out of
-ordinary per-visit traversal. Exhausting a~chunk emits its marker without
-calling the key function again. Infinite chunks remain incremental.
-Route visits stay separate from emitted phase-tagged snapshots.
+BFS event mode uses \code{breadth-first-events}, a~queue loop whose items
+distinguish candidate-event snapshots, pending visits, and expansion markers.
+It emits a~candidate event as soon as the candidate is queued; the pending
+visit later emits \code{:enter} or \code{:skip} when dequeued. Successor chunks
+yield the event and pending visit incrementally, followed by an expansion
+marker when exhausted. This keeps event branching out of ordinary per-visit
+traversal and preserves incremental behavior for infinite chunks. Route
+visits stay separate from event envelopes.
 
 \code{simple-paths} replaces global deduplication with a~per-route
 refinement. The route's identity keys live in metadata, so they control
@@ -1420,8 +1453,10 @@ previous queue entry, so only one candidate per key remains pending.
 sequence number makes equal priorities stable in insertion order. The default
 cumulative-distance priority has Dijkstra's shortest-path behavior when edge
 weights are non-negative and no user extension replaces \code{:distance}.
-Event output tags each selected visit on entry and emits its expansion
-snapshot after relaxation, before selecting another queue item.
+In event mode, each start or edge candidate is reported when the queue
+decision is made, including whether it was scheduled, improved, or discarded.
+Selected visits then emit \code{:enter}; their \code{:expand} event follows
+relaxation and precedes selection of the next queue item.
 
 \begingroup
 \typosize[8/9]

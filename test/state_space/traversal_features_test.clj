@@ -1,11 +1,48 @@
 (ns state-space.traversal-features-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.set :as set]
+            [clojure.test :refer [deftest is testing]]
             [state-space.core :as ss]))
+
+(defn- visit-snapshots [events]
+  (mapv (fn [{:keys [phase visit]}] (assoc visit :phase phase))
+        (filter #(= :visit (:event %)) events)))
+
+(defn- event-phases [events]
+  (mapv (fn [{:keys [phase visit]}] [(:state visit) phase])
+        (filter #(= :visit (:event %)) events)))
+
+(deftest event-output-uses-consistent-envelopes
+  (let [graph {:root [:leaf] :leaf []}
+        search-events (for [algorithm [ss/dfs ss/simple-paths ss/bfs
+                                       ss/postorder ss/best-first]]
+                        (vec (algorithm graph [:root] {:emit :events})))
+        progress-events (vec (ss/propagate graph {:root 1}
+                                           {:bottom 0 :join + :emit :events}))
+        assert-envelope
+        (fn [event]
+          (is (map? event))
+          (case (:event event)
+            :candidate
+            (is (every? #(contains? event %)
+                        [:origin :visit :disposition]))
+
+            :visit
+            (is (every? #(contains? event %) [:phase :visit]))
+
+            :progress
+            (is (contains? event :record))
+
+            (is false (str "Unexpected event type: " (:event event)))))]
+    (doseq [event (concat (mapcat identity search-events) progress-events)]
+      (assert-envelope event))
+    (is (every? #(= #{:candidate :visit} (set (map :event %)))
+                search-events))
+    (is (every? #(= :progress (:event %)) progress-events))))
 
 (deftest frontier-events-distinguish-entry-expansion-and-dfs-return
   (let [graph {:a [:b :c] :b [:d]}
         phases (fn [algorithm]
-                 (mapv (juxt :state :phase)
+                 (event-phases
                        (algorithm graph [:a] {:emit :events})))]
     (is (= [[:a :enter] [:b :enter] [:c :enter] [:a :expand]
             [:d :enter] [:b :expand] [:c :expand] [:d :expand]]
@@ -38,14 +75,14 @@
           events (algorithm graph [:root :root] options)]
       (is (empty? @calls))
       (let [all (vec events)
-            entries (filter #(= :enter (:phase %)) all)
-            expanded (filter #(= :expand (:phase %)) all)
+            entries (filter #(= :enter (:phase %)) (visit-snapshots all))
+            expanded (filter #(= :expand (:phase %)) (visit-snapshots all))
             default-visits (algorithm graph [:root :root]
                                       {:extensions [ss/path-extension]})]
         (is (= (vec default-visits) (mapv #(dissoc % :phase) entries)))
         (is (= (set (map #(dissoc % :phase) entries))
                (set (map #(dissoc % :phase) expanded))))
-        (is (= 8 (count all)))
+        (is (= 8 (count (filter #(= :candidate (:event %)) all))))
         (is (= {:start 2 :child 6 :parent 6 :project 4 :expand 4}
                (dissoc (frequencies @calls) :key)))
         (let [previous @calls]
@@ -59,9 +96,41 @@
     (let [graph {:root [:shared :a] :a [:shared]}
           events (ss/bfs graph [:root] (assoc options :emit :events))]
       (is (= (vec (ss/bfs graph [:root] options))
-             (mapv #(dissoc % :phase) (filter #(= :enter (:phase %)) events))))
+             (mapv #(dissoc % :phase)
+                   (filter #(= :enter (:phase %)) (visit-snapshots events)))))
       (is (= 2 (count (filter #(and (= :shared (:state %))
-                                   (= :expand (:phase %))) events)))))))
+                                   (= :expand (:phase %)))
+                              (visit-snapshots events))))))))
+
+(deftest bfs-candidate-events-precede-their-dequeue-outcome
+  (let [events (ss/bfs {:root [:left :right]
+                        :left [:goal]
+                        :right [:goal]
+                        :goal []}
+                       [:root]
+                       {:emit :events})
+        summary (mapv (fn [event]
+                        (if (= :candidate (:event event))
+                          [:candidate (get-in event [:visit :state])
+                           (:disposition event)]
+                          [:visit (get-in event [:visit :state])
+                           (:phase event) (:reason event)]))
+                      events)]
+    (is (= [[:candidate :root :scheduled]
+            [:visit :root :enter nil]
+            [:candidate :left :scheduled]
+            [:visit :left :enter nil]
+            [:candidate :right :scheduled]
+            [:visit :right :enter nil]
+            [:visit :root :expand nil]
+            [:candidate :goal :scheduled]
+            [:visit :goal :enter nil]
+            [:visit :left :expand nil]
+            [:candidate :goal :scheduled]
+            [:visit :goal :skip :already-visited]
+            [:visit :right :expand nil]
+            [:visit :goal :expand nil]]
+           summary))))
 
 (deftest frontier-event-entries-do-not-expand-the-selected-visit
   (doseq [algorithm [ss/bfs ss/best-first]]
@@ -73,19 +142,27 @@
                   [:root]
                   {:emit :events
                    :decode-edge (fn [state] (swap! decoded conj state) {:state state})})]
-      (is (= :enter (:phase (first events))))
+      (is (= :candidate (:event (first events))))
       (is (empty? @expanded))
       (is (empty? @decoded))
       (if (= algorithm ss/bfs)
         (do
-          (is (= [:child :enter] ((juxt :state :phase) (second events))))
+          (is (= [:child :enter]
+                 ((juxt :state :phase) (nth (visit-snapshots (take 4 events)) 1))))
           (is (= [:child] @decoded))
-          (is (= [:later :enter] ((juxt :state :phase) (nth events 2))))
-          (is (= [:root :expand] ((juxt :state :phase) (nth events 3)))))
+          (is (= [:later :scheduled]
+                 ((juxt (comp :state :visit) :disposition) (nth events 4))))
+          (is (= [:root :expand]
+                 ((juxt :state :phase) (nth (visit-snapshots (take 7 events)) 3)))))
         (do
-          (is (= [:root :expand] ((juxt :state :phase) (second events))))
-          (is (= [:child :later] @decoded))
-          (is (= [:child :enter] ((juxt :state :phase) (nth events 2))))))
+          (is (= [:root :enter]
+                 ((juxt :state :phase) (first (visit-snapshots (take 2 events))))))
+          (is (empty? @decoded))
+          (is (= [:child :scheduled]
+                 ((juxt (comp :state :visit) :disposition) (nth events 2))))
+          (is (= [:child] @decoded))
+          (is (= :candidate (:event (nth events 3))))
+          (is (= [:child :later] @decoded))))
       (is (= [:root] @expanded)))))
 
 (deftest bfs-events-preserve-infinite-starts-and-successor-streams
@@ -97,10 +174,10 @@
                   {:emit :events
                    :extensions [{:start (fn [{:keys [state]}]
                                           (swap! initialized conj state) {})}]})]
-      (is (= (mapv #(vector % :enter) (range 20))
-             (mapv (juxt :state :phase) (take 20 events))))
+      (is (= (mapv #(vector % :enter) (range 10))
+             (event-phases (take 20 events))))
       (is (empty? @expanded))
-      (is (= (vec (range 20)) @initialized))))
+      (is (= (vec (range 10)) @initialized))))
   (testing "an infinite successor chunk produces entries, not a false completion"
     (let [decoded (atom [])
           expanded (atom [])
@@ -111,10 +188,10 @@
                   {:emit :events
                    :decode-edge (fn [state]
                                   (swap! decoded conj state) {:state state})})]
-      (is (= (into [[:root :enter]] (map #(vector % :enter) (range 19)))
-             (mapv (juxt :state :phase) (take 20 events))))
+      (is (= (into [[:root :enter]] (map #(vector % :enter) (range 9)))
+             (event-phases (take 20 events))))
       (is (= [:root] @expanded))
-      (is (= (vec (range 19)) @decoded)))))
+      (is (= (vec (range 9)) @decoded)))))
 
 (deftest best-first-events-report-only-selected-candidates
   (let [graph {:root [[:target 10] [:via 1] [:other 1]]
@@ -128,13 +205,13 @@
             [:via :enter 1] [:via :expand 1]
             [:other :enter 1] [:other :expand 1]
             [:target :enter 3] [:target :expand 3]]
-           (mapv (juxt :state :phase :distance) events)))
-    (is (= [:root :via :target] (:path (last events)))))
+           (mapv (juxt :state :phase :distance) (visit-snapshots events))))
+    (is (= [:root :via :target] (:path (last (visit-snapshots events))))))
   (testing "custom priorities can decrease; expansion does not mean globally sorted"
     (let [options {:priority :state :emit :events}
           events (ss/best-first {5 [1]} [5] options)]
       (is (= [[5 :enter] [5 :expand] [1 :enter] [1 :expand]]
-             (mapv (juxt :state :phase) events))))))
+             (event-phases events))))))
 
 (deftest frontier-events-handle-pruning-empty-input-and-expansion-errors
   (doseq [algorithm [ss/bfs ss/best-first]]
@@ -143,19 +220,20 @@
                   (fn [_] (throw (Exception. "Pruned space must not be called")))
                   [:root] {:emit :events :expand? (constantly false)})]
       (is (= [[:root :enter] [:root :expand]]
-             (mapv (juxt :state :phase) events))))
+             (event-phases events))))
     (let [error (ex-info "Expansion failed" {})
           events (algorithm (fn [_] (throw error)) [:root] {:emit :events})]
-      (is (= :enter (:phase (first events))))
-      (is (identical? error (try (second events)
+      (is (= :candidate (:event (first events))))
+      (is (identical? error (try (nth events 2)
                                 (catch clojure.lang.ExceptionInfo actual actual)))))))
 
 (deftest frontier-events-are-stack-safe-on-deep-chains
   (doseq [algorithm [ss/bfs ss/best-first]]
     (let [events (algorithm (fn [n] (when (< n 20000) [(inc n)])) [0]
                             {:emit :events})]
-      (is (= 40002 (count events)))
-      (is (= [20000 :expand] ((juxt :state :phase) (last events)))))))
+      (is (= 60003 (count events)))
+      (is (= [20000 :expand]
+             ((juxt :state :phase) (last (visit-snapshots events))))))))
 
 (deftest frontier-events-preserve-order-on-every-three-state-graph
   (doseq [mask (range 512)
@@ -166,12 +244,14 @@
                                         to))]))
           options {:extensions [ss/path-extension]}
           events (vec (algorithm graph [0 1 2 0] (assoc options :emit :events)))
-          entries (filter #(= :enter (:phase %)) events)
-          expansions (filter #(= :expand (:phase %)) events)]
+          entries (filter #(= :enter (:phase %)) (visit-snapshots events))
+          expansions (filter #(= :expand (:phase %)) (visit-snapshots events))]
       (is (= (vec (algorithm graph [0 1 2 0] options))
              (mapv #(dissoc % :phase) entries)))
       (is (= (mapv :state entries) (mapv :state expansions)))
-      (is (= 6 (count events))))))
+      (is (= (+ (count (filter #(= :visit (:event %)) events))
+                (count (filter #(= :candidate (:event %)) events)))
+             (count events))))))
 
 (deftest best-first-event-callbacks-and-fifo-ties-remain-unchanged
   (let [calls (atom [])
@@ -184,8 +264,69 @@
     (is (empty? @calls))
     (is (= [[:b :enter] [:b :expand] [:a :enter] [:a :expand]
             [:c :enter] [:c :expand]]
-           (mapv (juxt :state :phase) events)))
+           (event-phases events)))
     (is (= [:b :a :b :c] @calls))))
+
+(deftest candidate-events-report-start-edge-and-rejection-decisions
+  (let [dfs-events (vec (ss/dfs {:root [:leaf :leaf]} [:root :root]
+                                {:emit :events}))
+        bfs-events (vec (ss/bfs {:root [:leaf :leaf]} [:root]
+                                {:emit :events}))
+        path-events (vec (ss/simple-paths {:root [:root]} [:root]
+                                          {:emit :events}))
+        discarded (filter #(= :discarded (:disposition %))
+                          (filter #(= :candidate (:event %)) dfs-events))
+        skipped (filter #(and (= :visit (:event %)) (= :skip (:phase %)))
+                        bfs-events)]
+    (is (= [:already-visited :already-visited] (mapv :reason discarded)))
+    (is (= [[:leaf :already-visited]]
+           (mapv (fn [event]
+                   [(get-in event [:visit :state]) (:reason event)])
+                 skipped)))
+    (is (= :on-current-path
+           (:reason (last (filter #(= :candidate (:event %)) path-events)))))))
+
+(deftest best-first-candidate-events-describe-pending-improvements-and-settled-keys
+  (let [events (vec
+                (ss/best-first
+                 {:root [[:target 10] [:via 1] [:other 1]]
+                  :via [[:target 2] [:root 1]]}
+                 [:root]
+                 {:emit :events
+                  :extensions [ss/path-extension]
+                  :decode-edge (fn [[state weight]]
+                                 {:state state :weight weight})}))
+        candidates (filter #(= :candidate (:event %)) events)
+        target-events (filter #(= :target (get-in % [:visit :state])) candidates)]
+    (is (= [[:scheduled :inserted] [:scheduled :improved-pending]]
+           (mapv (juxt :disposition :effect) target-events)))
+    (is (= :already-settled
+           (:reason (last (filter #(= :root (get-in % [:visit :state]))
+                                  candidates)))))
+    (is (= [:root :via :target]
+           (:path (:visit (first (filter #(and (= :visit (:event %))
+                                                (= :enter (:phase %))
+                                                (= :target (get-in % [:visit :state])))
+                                         events))))))))
+
+(deftest propagation-events-wrap-each-progress-record
+  (let [space {:root [[:leaf #{:new}]]}
+        initial {:root #{:old}}
+        options {:bottom #{} :join set/union}
+        progress (vec (ss/propagate space initial options))
+        events (vec (ss/propagate space initial (assoc options :emit :events)))]
+    (is (= progress (mapv :record events)))
+    (is (every? #(= :progress (:event %)) events))))
+
+(deftest postorder-event-output-matches-the-shared-dfs-trace
+  (let [graph {:root [:left :right] :left [:shared] :right [:shared]}
+        starts [:root :root]
+        dfs-events (vec (ss/dfs graph starts {:emit :events}))
+        postorder-events (vec (ss/postorder graph starts {:emit :events}))]
+    (is (= dfs-events postorder-events))
+    (is (= (vec (ss/postorder graph starts))
+           (mapv #(dissoc % :phase)
+                 (filter #(= :exit (:phase %)) (visit-snapshots postorder-events)))))))
 
 (deftest fold-descent-sees-updated-siblings-before-identity-and-cached-lookups
   (let [calls (atom [])
@@ -234,11 +375,12 @@
                         :descend (fn [n transition _]
                                    (swap! calls conj [:descend n (:state transition)]) {})
                         :step (fn [_ _] (reduced 1))}})]
-    (is (= :enter (:phase (first events))))
+    (is (= :candidate (:event (first events))))
     (is (empty? @calls))
-    (is (= :a (:state (second events))))
+    (is (= :candidate (:event (nth events 2))))
     (is (= [[:descend 0 :a]] @calls))
-    (is (= [:root :a :a :root] (mapv :state events)))
+    (is (= [:root :a :a :root]
+           (mapv :state (visit-snapshots events))))
     (is (= [[:descend 0 :a]] @calls)))
   (testing "reduced initialization skips descent entirely"
     (is (= [{:state :root :value false}]
@@ -266,9 +408,9 @@
                        {:emit :events
                         :fold {:init (constantly 0) :step (fn [n _] n)
                                :descend (fn [_ _ _] (throw error))}})]
-    (is (= :enter (:phase (first events))))
+    (is (= :candidate (:event (first events))))
     (is (identical? error
-                    (try (second events)
+                    (try (nth events 2)
                          (catch clojure.lang.ExceptionInfo actual actual))))))
 
 (defn- alpha-beta-fold [scores]
@@ -340,7 +482,7 @@
                 events (ss/dfs graph [0] (assoc options :emit :events))]
             (is (= (reference-alpha-beta graph scores 0 0 alpha beta) result)
                 (str "DAG " case-number ", window " [alpha beta]))
-            (is (= result (:value (last events))))
+            (is (= result (:value (last (visit-snapshots events)))))
             (is (cond (<= exact alpha) (<= result alpha)
                       (>= exact beta) (>= result beta)
                       :else (= exact result)))))))))

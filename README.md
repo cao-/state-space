@@ -218,44 +218,56 @@ so you can inspect intermediate results instead of taking only the last.
 ## Advanced: traversal output and tracing
 
 Ordinary searches need no output options. When you need depth-first return
-order (children before their parent) or want to observe progress, select an
-output. Only `:events` adds `:phase` tags; `:enter` and `:exit` return
-untagged visits:
+order (children before their parent) or want to observe traversal decisions,
+select an output. `:events` returns a lazy stream of tagged event maps:
 
-| Operation | `:emit :enter` (default) | `:emit :exit` | `:emit :events` |
-|-----------|-------------------------|---------------|-----------------|
-| `dfs`, `simple-paths` | Pre-order visits | Post-order visits | Entry and return snapshots |
-| `bfs`, `best-first` | Ordinary visits | Not supported | Entry and local-expansion snapshots |
+| Operation | Default output | `:emit :events` |
+|-----------|---------------|-----------------|
+| `dfs`, `simple-paths` | Pre-order visits (`:emit :enter`) | Candidate decisions and visit entry/return events |
+| `bfs`, `best-first` | Ordinary visits | Candidate decisions and visit entry/expansion events |
+| `postorder` | Completed visits | The shared DFS event stream |
+| `propagate` | Bare progress records | Progress records wrapped in event envelopes |
 
 ```clojure
-(mapv (juxt :state :phase)
-      (ss/dfs {:root [:left :right]} [:root] {:emit :events}))
+(mapv (fn [{:keys [phase visit]}] [(:state visit) phase])
+      (filter #(= :visit (:event %))
+              (ss/dfs {:root [:left :right]} [:root] {:emit :events})))
 ;; => [[:root :enter] [:left :enter] [:left :exit]
 ;;     [:right :enter] [:right :exit] [:root :exit]]
 ```
 
-`postorder` is the convenient name for `dfs` with `:emit :exit`. Both support
-`:fold`; with `:emit :events`, DFS additionally shows entries before evaluation
-and exits carrying the computed `:value`. Simple-path output describes each
-accepted route occurrence separately and does not support memoized folds.
+Every event has an `:event` key. `:visit` records contain `:phase` and a
+nested `:visit` map; `:candidate` records describe starts or decoded edges,
+including `:disposition` (`:scheduled` or `:discarded`). Edge candidates also
+include `:from` and `:transition`. Rejections have a `:reason`; best-first
+scheduled candidates include an `:effect` such as `:inserted` or
+`:improved-pending`. A propagation event wraps its existing record under
+`:record`.
 
-Event phases are output-only and never enter traversal callbacks:
+Visit phases are output-only and never enter traversal callbacks:
 
-- `:enter`: a visit is accepted, before requesting its successors.
+- `:enter`: a visit is accepted for processing; in BFS and best-first it is
+  emitted when selected, not when first queued.
 - `:exit`: depth-first exploration returns under cycle and pruning rules.
 - `:expand`: BFS or best-first has handled the immediate outgoing transitions,
   **not** completed descendants. BFS can accept children before this marker;
   best-first emits it before selecting another visit.
+- `:skip`: a queued BFS candidate is rejected at dequeue time, for example
+  because an equivalent visit was already accepted.
 
-Reserve `:phase` for these tags rather than using it as route context.
-Without a fold, filtering entries and removing `:phase` recovers ordinary
-visit order. A fold can also cut off siblings and therefore change which
-visits occur.
-Pruned visits still report completion. Lazy consumption can leave entries
-without completion events; infinite branches or successor streams may never
-finish. Events are observations, not guaranteed resource-cleanup callbacks.
-The documentation and worked examples explain cycle handling, shared states,
-and precise callback timing.
+In DFS, immediate duplicate/path-repeat rejection appears as a discarded
+candidate; the traversal does not emit a separate `:skip` visit event. BFS
+emits a `:scheduled` candidate when it is queued, then may emit a later
+`:skip` visit if the candidate is a duplicate when dequeued. Best-first emits
+the candidate when it decides whether to enqueue, improve, or discard it.
+Thus a candidate event reports the decision made at that point; later visit
+events report what happens when a queued candidate is selected. Filter `:visit`
+events by `:phase` to recover lifecycle snapshots. Event records keep route
+visits unchanged and do not add event fields to callback inputs. A fold can
+cut off siblings and therefore change which candidates and visits occur. Lazy
+consumption can leave visits without completion events; infinite branches or
+successor streams may never finish. Events are observations, not cleanup
+callbacks.
 
 ## Advanced: sibling-dependent pruning
 
@@ -277,16 +289,18 @@ shorter for a small tree; folds supply stack safety and contextual memoization.
 ## Option reference
 
 The graph searches share `:project`, `:expand?`, `:decode-edge`, `:visit-key`,
-and `:extensions`. Output options are listed above. DFS and post-order also
-accept `:fold`; best-first accepts `:priority`. Propagation shares only
-`:project`, `:expand?`, and `:decode-edge`, with required `:bottom` and `:join`.
+and `:extensions`. DFS and simple-paths also accept `:emit :exit`; DFS and
+post-order accept `:fold`; best-first accepts `:priority`. Propagation shares
+only `:project`, `:expand?`, and `:decode-edge`, with required `:bottom` and
+`:join`, and accepts `:emit :events`.
 
-Only supported execution modes are checked: invalid `:emit` values on
-operations with selectable output, folds with `:visit-key nil`, and DFS
-folds with entry-only output throw `ExceptionInfo` when called. Unused
-options are ignored, including `:emit` on fixed-output operations and
-`:fold` on operations without folding. Traversal callbacks remain lazy;
-data and callback contracts are the caller's responsibility, not validated.
+Invalid `:emit` values on operations with selectable output, invalid
+propagation output, folds with `:visit-key nil`, and DFS folds with entry-only
+output throw `ExceptionInfo` when called. `postorder` recognizes only
+`:emit :events`; other `:emit` values are ignored. Unused options and
+`:fold` on operations without folding are ignored. Traversal callbacks remain
+lazy; data and callback contracts are the caller's responsibility, not
+validated.
 
 ## Benchmarks
 

@@ -2,8 +2,8 @@
 ;;   clojure -M:bench
 ;;   clojure -M:bench --compare [--baseline origin/main]
 ;; Options: --runs N --warmup N --samples N --workload NAME
-;; Workloads: dfs-enter dfs-exit dfs-events bfs-enter bfs-events best-first
-;;            postorder-fold simple-paths propagate
+;; Workloads: dfs-enter dfs-exit bfs-enter best-first postorder-fold
+;;            simple-paths propagate
 
 (ns state-space.bench
   "Benchmark public APIs, or compare the working tree with a Git ref."
@@ -17,8 +17,8 @@
            [java.nio.file.attribute FileAttribute]
            [java.util Locale]))
 
-(def ^:private node-count 32767)
-(def ^:private path-node-count 19)
+(def ^:private node-count 131071)
+(def ^:private path-node-count 20)
 
 (def ^:private graph
   (into {}
@@ -51,15 +51,9 @@
    {:name "dfs-exit" :label "DFS :exit, balanced tree"
     :expected node-count
     :run #(count (search/dfs graph [0] {:emit :exit}))}
-   {:name "dfs-events" :label "DFS :events, balanced tree"
-    :expected (* 2 node-count)
-    :run #(count (search/dfs graph [0] {:emit :events}))}
    {:name "bfs-enter" :label "BFS :enter, balanced tree"
     :expected node-count
     :run #(count (search/bfs graph [0]))}
-   {:name "bfs-events" :label "BFS :events, balanced tree"
-    :expected (* 2 node-count)
-    :run #(count (search/bfs graph [0] {:emit :events}))}
    {:name "best-first" :label "Best-first, weighted balanced tree"
     :expected node-count
     :run #(count (search/best-first
@@ -69,7 +63,8 @@
    {:name "postorder-fold" :label "Postorder fold, balanced tree"
     :expected node-count
     :run #(count (search/postorder graph [0] {:fold tree-fold}))}
-   {:name "simple-paths" :label "Simple paths, dense DAG (19 states)"
+   {:name "simple-paths" :label (format "Simple paths, dense DAG (%d states)"
+                                        path-node-count)
     :expected (bit-shift-left 1 (dec path-node-count))
     :run #(count (search/simple-paths path-graph [0]))}
    {:name "propagate" :label "Propagate, balanced tree"
@@ -337,8 +332,8 @@
   (println "Run:       clojure -M:bench")
   (println "Compare:   clojure -M:bench --compare [--baseline origin/main]")
   (println "Options:   --runs N --warmup N --samples N")
-  (println "Workloads: dfs-enter dfs-exit dfs-events bfs-enter bfs-events")
-  (println "           best-first postorder-fold simple-paths propagate"))
+  (println "Workloads: dfs-enter dfs-exit bfs-enter best-first")
+  (println "           postorder-fold simple-paths propagate"))
 
 (defn -main [& args]
   (let [{:keys [mode] :as options} (parse-options args)]

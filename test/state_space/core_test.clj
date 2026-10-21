@@ -3,17 +3,25 @@
             [clojure.test :refer [deftest is testing]]
             [state-space.core :as search]))
 
+(defn- visit-snapshots [events]
+  (mapv (fn [{:keys [phase visit]}] (assoc visit :phase phase))
+        (filter #(= :visit (:event %)) events)))
+
+(defn- event-phases [events]
+  (mapv (fn [{:keys [phase visit]}] [(:state visit) phase])
+        (filter #(= :visit (:event %)) events)))
+
 (deftest dfs-lifecycle-emits-nested-entry-and-exit-snapshots
   (let [graph {:a [:b :c] :b [:d]}
         options {:extensions [search/path-extension search/depth-extension]}
         events (vec (search/dfs graph [:a :other] (assoc options :emit :events)))
         visits-at (fn [phase]
                     (mapv #(dissoc % :phase)
-                          (filter #(= phase (:phase %)) events)))]
+                          (filter #(= phase (:phase %)) (visit-snapshots events))))]
     (is (= [[:a :enter] [:b :enter] [:d :enter] [:d :exit]
             [:b :exit] [:c :enter] [:c :exit] [:a :exit]
             [:other :enter] [:other :exit]]
-           (mapv (juxt :state :phase) events)))
+           (event-phases events)))
     (is (= (vec (search/dfs graph [:a :other] options)) (visits-at :enter)))
     (is (= (vec (search/postorder graph [:a :other] options)) (visits-at :exit)))
     (is (= (visits-at :enter)
@@ -25,12 +33,12 @@
         events (vec (search/dfs graph [:a :a :d] {:emit :events}))]
     (is (= [[:a :enter] [:b :enter] [:d :enter] [:d :exit]
             [:b :exit] [:c :enter] [:c :exit] [:a :exit]]
-           (mapv (juxt :state :phase) events))))
+           (event-phases events))))
   (testing "nil and false are ordinary visit keys"
     (is (= [[nil :enter] [false :enter] [false :exit] [nil :exit]]
-           (mapv (juxt :state :phase)
-                 (search/dfs {nil [false] false [nil]}
-                             [nil false] {:emit :events})))))
+           (event-phases
+            (search/dfs {nil [false] false [nil]}
+                        [nil false] {:emit :events})))))
   (testing "context-sensitive keys distinguish separate computations"
     (let [events (search/dfs {:a [:d :b] :b [:d]} [:a]
                             {:emit :events
@@ -38,7 +46,7 @@
                              :visit-key (juxt :state :depth)})]
       (is (= [[:d 1] [:d 2] [:b 1] [:a 0]]
              (mapv (juxt :state :depth)
-                   (filter #(= :exit (:phase %)) events)))))))
+                   (filter #(= :exit (:phase %)) (visit-snapshots events))))))))
 
 (deftest dfs-lifecycle-exits-pruned-visits-without-generating-successors
   (let [expanded (atom [])
@@ -50,7 +58,7 @@
                 {:emit :events :expand? #(not= :pruned (:state %))})]
     (is (= [[:root :enter] [:pruned :enter] [:pruned :exit]
             [:leaf :enter] [:leaf :exit] [:root :exit]]
-           (mapv (juxt :state :phase) events)))
+           (event-phases events)))
     (is (= [:root :leaf] @expanded))))
 
 (deftest dfs-lifecycle-metadata-does-not-leak-into-route-callbacks
@@ -75,14 +83,15 @@
                            (record :next visit)
                            {})}]})]
     (is (empty? @calls))
-    (is (= 4 (count events)))
+    (is (= 8 (count events)))
     (is (= {:start 2 :next 2 :parent 2 :key 4
             :space 2 :project 2 :expand 2}
            (frequencies (map first @calls))))
     (is (= [{:state :root :path [:root]}
             {:state :leaf :path [:root :leaf]}]
            (mapv #(dissoc % :phase)
-                 (filter #(= :exit (:phase %)) (reverse events)))))))
+                 (filter #(= :exit (:phase %))
+                         (reverse (visit-snapshots events))))))))
 
 (deftest dfs-lifecycle-defers-expansion-and-next-sibling-until-requested
   (let [calls (atom [])
@@ -96,13 +105,29 @@
                                 (swap! calls conj [:decode state])
                                 {:state state})})]
     (is (empty? @calls))
-    (is (= {:state :root :phase :enter} (first events)))
+    (is (= {:event :candidate :origin :start :visit {:state :root}
+            :disposition :scheduled}
+           (first events)))
     (is (empty? @calls))
-    (is (= {:state :leaf :phase :enter} (second events)))
+    (is (= {:event :visit :phase :enter :visit {:state :root}}
+           (second events)))
+    (is (= {:event :candidate :origin :edge
+            :from {:state :root} :transition {:state :leaf}
+            :visit {:state :leaf} :disposition :scheduled}
+           (nth events 2)))
     (is (= [[:space :root] [:decode :leaf]] @calls))
-    (is (= {:state :leaf :phase :exit} (nth events 2)))
+    (is (= {:event :visit :phase :enter :visit {:state :leaf}}
+           (nth events 3)))
+    (is (= [[:space :root] [:decode :leaf]] @calls))
+    (is (= {:event :visit :phase :exit :visit {:state :leaf}}
+           (nth events 4)))
     (is (= [[:space :root] [:decode :leaf] [:space :leaf]] @calls))
-    (is (= {:state :later :phase :enter} (nth events 3)))
+    (is (= {:event :candidate :origin :edge
+            :from {:state :root} :transition {:state :later}
+            :visit {:state :later} :disposition :scheduled}
+           (nth events 5)))
+    (is (= {:event :visit :phase :enter :visit {:state :later}}
+           (nth events 6)))
     (is (= [[:space :root] [:decode :leaf] [:space :leaf] [:decode :later]]
            @calls))))
 
@@ -115,7 +140,7 @@
                               [{:start (fn [{:keys [state]}]
                                          (swap! initialized conj state) {})}]})]
       (is (= [[0 :enter] [0 :exit] [1 :enter] [1 :exit] [2 :enter]]
-             (mapv (juxt :state :phase) (take 5 events))))
+             (event-phases (take 8 events))))
       (is (= [0 1 2] @initialized))))
   (testing "an infinite sequence of leaves produces exits incrementally"
     (let [decoded (atom [])
@@ -126,12 +151,14 @@
                                   (swap! decoded conj state)
                                   {:state state})})]
       (is (= [[:root :enter] [0 :enter] [0 :exit] [1 :enter] [1 :exit]]
-             (mapv (juxt :state :phase) (take 5 events))))
+             (event-phases (take 8 events))))
       (is (= [0 1] @decoded))))
   (testing "an infinite branch can produce only entries"
     (is (= (mapv #(hash-map :state % :phase :enter) (range 100))
-           (vec (take 100 (search/dfs (fn [n] [(inc n)]) [0]
-                                      {:emit :events :visit-key nil})))))))
+           (filterv #(= :enter (:phase %))
+                    (visit-snapshots
+                     (take 200 (search/dfs (fn [n] [(inc n)]) [0]
+                                           {:emit :events :visit-key nil}))))))))
 
 (deftest dfs-lifecycle-without-deduplication-pairs-each-occurrence
   (let [events (search/dfs {:root [:leaf :leaf]} [:root :root]
@@ -139,7 +166,7 @@
     (is (= (vec (mapcat identity
                        (repeat 2 [[:root :enter] [:leaf :enter] [:leaf :exit]
                                   [:leaf :enter] [:leaf :exit] [:root :exit]])))
-           (mapv (juxt :state :phase) events)))))
+           (event-phases events)))))
 
 (deftest simple-path-lifecycle-pairs-paths-and-rejects-cycles
   (let [graph {:a [:b :c] :b [:a :c] :c [:a]}
@@ -148,9 +175,11 @@
     (is (= [[[:a] :enter] [[:a :b] :enter] [[:a :b :c] :enter]
             [[:a :b :c] :exit] [[:a :b] :exit] [[:a :c] :enter]
             [[:a :c] :exit] [[:a] :exit]]
-           (mapv (juxt :path :phase) events)))
+           (mapv (fn [{:keys [phase visit]}] [(:path visit) phase])
+                 (filter #(= :visit (:event %)) events))))
     (is (= (vec (search/simple-paths graph [:a] options))
-           (mapv #(dissoc % :phase) (filter #(= :enter (:phase %)) events))))))
+           (mapv #(dissoc % :phase)
+                 (filter #(= :enter (:phase %)) (visit-snapshots events)))))))
 
 (deftest dfs-lifecycle-and-its-views-are-stack-safe
   (let [depth 20000
@@ -158,9 +187,12 @@
     (is (= (range (inc depth)) (map :state (search/dfs space [0]))))
     (is (= (range depth -1 -1) (map :state (search/postorder space [0]))))
     (let [events (search/dfs space [0] {:emit :events})]
-      (is (= (* 2 (inc depth)) (count events)))
-      (is (= (range (inc depth)) (map :state (take (inc depth) events))))
-      (is (= (range depth -1 -1) (map :state (drop (inc depth) events)))))))
+      (is (= (* 3 (inc depth)) (count events)))
+      (is (= (range (inc depth))
+             (map :state (take (inc depth) (visit-snapshots events)))))
+      (is (= (range depth -1 -1)
+             (map :state
+                  (filter #(= :exit (:phase %)) (visit-snapshots events))))))))
 
 (deftest dfs-lifecycle-does-not-hide-expansion-errors-or-publish-a-false-exit
   (let [error (ex-info "Successor generation failed" {:state :broken})
@@ -171,11 +203,11 @@
                   (case state :root [:leaf :broken] :broken (throw error) []))
                 [:root] {:emit :events})]
     (is (= [[:root :enter] [:leaf :enter] [:leaf :exit] [:broken :enter]]
-           (mapv (juxt :state :phase) (take 4 events))))
+           (event-phases (take 7 events))))
     (is (= [:root :leaf] @expanded))
     (is (identical? error
                     (try
-                      (nth events 4)
+                      (nth events 7)
                       (catch clojure.lang.ExceptionInfo actual actual))))
     (is (= [:root :leaf :broken] @expanded))))
 
@@ -205,7 +237,8 @@
     (let [graph {:root [:a :b] :a [:shared] :b [:shared]}
           events (vec (algorithm graph [:root] (assoc options :emit :events)))]
       (doseq [phase [:enter :exit]]
-        (is (= (mapv #(dissoc % :phase) (filter #(= phase (:phase %)) events))
+        (is (= (mapv #(dissoc % :phase)
+                     (filter #(= phase (:phase %)) (visit-snapshots events)))
                (vec (algorithm graph [:root] (assoc options :emit phase)))))))))
 
 (deftest simple-path-exits-preserve-separate-route-occurrences
@@ -238,20 +271,28 @@
                                 (+ n (:value child)))
                         :finish (fn [n] (swap! calls conj [:finish n]) n)}})]
     (is (empty? @calls))
-    (is (= {:state :root :phase :enter} (first events)))
+    (is (= :candidate (:event (first events))))
     (is (empty? @calls))
-    (is (= {:state :a :phase :enter} (second events)))
+    (is (= {:event :visit :phase :enter :visit {:state :root}}
+           (second events)))
+    (is (empty? @calls))
+    (is (= {:event :candidate :origin :edge
+            :from {:state :root} :transition {:state :a}
+            :visit {:state :a} :disposition :scheduled}
+           (nth events 2)))
     (is (= [[:init :root]] @calls))
-    (is (= {:state :shared :phase :enter} (nth events 2)))
-    (is (= [[:init :root] [:init :a]] @calls))
-    (is (= {:state :shared :phase :exit :value 1} (nth events 3)))
-    (is (= [[:init :root] [:init :a] [:init :shared] [:finish 1]] @calls))
+    (is (= {:event :visit :phase :enter :visit {:state :a}}
+           (nth events 3)))
+    (let [all (vec events)]
+      (is (= [[:init :root] [:init :a] [:init :shared] [:finish 1]]
+             (take 4 @calls)))
     (is (= [[:shared 1] [:a 2] [:b 2] [:root 5]]
-           (mapv (juxt :state :value) (filter #(= :exit (:phase %)) events))))
+           (mapv (juxt :state :value)
+                 (filter #(= :exit (:phase %)) (visit-snapshots all)))))
     (is (every? #(not (contains? % :value))
-                (filter #(= :enter (:phase %)) events)))
+                (filter #(= :enter (:phase %)) (visit-snapshots all))))
     (is (= 4 (count (filter #(= :init (first %)) @calls))))
-    (is (= 4 (count (filter #(= :step (first %)) @calls))))))
+    (is (= 4 (count (filter #(= :step (first %)) @calls)))))))
 
 (deftest dfs-fold-events-support-cycles-early-stopping-and-false-values
   (testing "active back edges are phase-free and have no computed value"
@@ -262,7 +303,7 @@
                    :fold {:init (constantly 0)
                           :step (fn [n child] (swap! views conj child) (inc n))}})]
       (is (= [[:root :enter] [:leaf :enter] [:leaf :exit] [:root :exit]]
-             (mapv (juxt :state :phase) events)))
+             (event-phases events)))
       (is (= [true false] (mapv :back-edge @views)))
       (is (= [false true] (mapv #(contains? % :value) @views)))))
   (doseq [value [nil false]]
@@ -273,10 +314,11 @@
                    :fold {:init (fn [_] (swap! calls conj :init) (reduced value))
                           :step (fn [_ _] (throw (Exception. "Unexpected step")))
                           :finish (fn [v] (swap! calls conj :finish) v)}})]
-      (is (= {:state :root :phase :enter} (first events)))
+      (is (= :candidate (:event (first events))))
       (is (empty? @calls))
       (is (= [{:state :root :phase :enter}
-              {:state :root :phase :exit :value value}] (vec events)))
+              {:state :root :phase :exit :value value}]
+             (visit-snapshots events)))
       (is (= [:init :finish] @calls))))
   (testing "a reduced step suppresses later successor decoding"
     (let [decoded (atom [])
@@ -287,9 +329,9 @@
                    :fold {:init (constantly nil)
                           :step (fn [_ _] (reduced :done))}})]
       (is (= [[:root :enter] [:leaf :enter] [:leaf :exit] [:root :exit]]
-             (mapv (juxt :state :phase) events)))
+             (event-phases events)))
       (is (= [:leaf] @decoded))
-      (is (= :done (:value (last events)))))))
+      (is (= :done (:value (last (visit-snapshots events))))))))
 
 (deftest unsupported-execution-modes-fail-explicitly
   (doseq [[algorithm options expected-key]
@@ -330,7 +372,7 @@
                [search/best-first {:emit :events} {:fold fold :bottom nil :join nil}]
                [search/postorder {} {:emit :unknown :priority nil :bottom nil :join nil}]
                [search/postorder {:fold fold}
-                {:emit :events :priority nil :bottom nil :join nil}]]]
+                {:priority nil :bottom nil :join nil}]]]
     (doseq [[algorithm options unused] cases]
       (is (= (vec (algorithm graph [:root] options))
              (vec (algorithm graph [:root] (merge options unused unrelated)))))))
@@ -339,7 +381,7 @@
     (is (= (vec (search/propagate graph {:root #{:fact}} options))
            (vec (search/propagate
                  graph {:root #{:fact}}
-                 (merge options {:emit :unknown :fold {} :priority nil
+                 (merge options {:emit :enter :fold {} :priority nil
                                  :visit-key nil :extensions [{}]
                                  :events? true :unknown-option :unused})))))))
 
@@ -377,6 +419,12 @@
       (is (= expected-option (:option (ex-data error))))
       (is (= :propagate (:algorithm (ex-data error))))
       (is (empty? @calls))))
+  (testing "unsupported progress output fails explicitly"
+    (let [error (try
+                  (search/propagate {} {} {:bottom 0 :join max :emit :unknown})
+                  (catch clojure.lang.ExceptionInfo error error))]
+      (is (= :emit (:option (ex-data error))))
+      (is (= :propagate (:algorithm (ex-data error))))))
   (testing "nil is a valid bottom value when the option is present"
     (let [progress (search/propagate
                     {:root [{:state :leaf :value :fact}]}
@@ -404,7 +452,7 @@
                                           to))]))
             expected (reference graph [0 1 2 0])
             events (vec (search/dfs graph [0 1 2 0] {:emit :events}))]
-        (is (= expected (mapv (juxt :state :phase) events))
+        (is (= expected (event-phases events))
             (str "Lifecycle for graph " graph))
         (is (= (mapv first (filter #(= :enter (second %)) expected))
                (mapv :state (search/dfs graph [0 1 2 0]))))
@@ -1234,8 +1282,11 @@
                  (vec (search/dfs graph (range 3) {:emit :exit :fold fold})))
               (str "DFS exit graph mask " mask))
           (is (= @expected
-                 (mapv #(dissoc % :phase) (filter #(= :exit (:phase %)) events))))
-          (is (= 6 (count events))))))))
+                 (mapv #(dissoc % :phase)
+                       (filter #(= :exit (:phase %))
+                               (visit-snapshots events)))))
+          (is (= (+ 9 (reduce + (map count (vals graph))))
+                 (count events))))))))
 
 (deftest postorder-finishes-each-key-once-including-early-stops
   (let [finished (atom [])

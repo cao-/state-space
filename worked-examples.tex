@@ -1515,7 +1515,8 @@ Even a~folder with no subfolders has both events:
 (def scan-events
   (ss/dfs project-folders [:project] {:emit :events}))
 
-(mapv (juxt :state :phase) scan-events)
+(mapv (fn [{:keys [phase visit]}] [(:state visit) phase])
+      (filter #(= :visit (:event %)) scan-events))
 ;; => [[:project :enter] [:src :enter]
 ;;     [:parser :enter] [:parser :exit] [:lexer :enter] [:lexer :exit]
 ;;     [:src :exit] [:tests :enter] [:tests :exit] [:project :exit]]
@@ -1527,8 +1528,9 @@ events to obtain the requested completion order:
 
 \begtt \hisyntax{clojure}
 (->> scan-events
+     (filter #(= :visit (:event %)))
      (filter #(= :exit (:phase %)))
-     (mapv :state))
+     (mapv #(get-in % [:visit :state])))
 ;; => [:parser :lexer :src :tests :project]
 \endtt
 
@@ -1563,9 +1565,10 @@ because home is already on that route:
    :market [:museum]
    :museum [:home]})
 
-(mapv (juxt :path :phase)
+(mapv (fn [{:keys [phase visit]}] [(:path visit) phase])
+      (filter #(= :visit (:event %))
       (ss/simple-paths route-prefix-map [:home]
-                       {:emit :events :extensions [ss/path-extension]}))
+                       {:emit :events :extensions [ss/path-extension]})))
 ;; => [[[:home] :enter]
 ;;     [[:home :park] :enter]
 ;;     [[:home :park :museum] :enter] [[:home :park :museum] :exit]
@@ -1617,13 +1620,15 @@ route from it has finished:
    :extensions [ss/path-extension]
    :decode-edge (fn [[state weight]] {:state state :weight weight})})
 
-(mapv (juxt :state :phase)
-      (ss/bfs progress-roads [:start] progress-options))
+(mapv (fn [{:keys [phase visit]}] [(:state visit) phase])
+      (filter #(= :visit (:event %))
+      (ss/bfs progress-roads [:start] progress-options)))
 ;; => [[:start :enter] [:goal :enter] [:via :enter]
-;;     [:start :expand] [:goal :expand] [:via :expand]]
+;;     [:start :expand] [:goal :expand] [:goal :skip] [:via :expand]]
 
-(mapv (juxt :state :phase)
-      (ss/best-first progress-roads [:start] progress-options))
+(mapv (fn [{:keys [phase visit]}] [(:state visit) phase])
+      (filter #(= :visit (:event %))
+      (ss/best-first progress-roads [:start] progress-options)))
 ;; => [[:start :enter] [:start :expand] [:via :enter]
 ;;     [:via :expand] [:goal :enter] [:goal :expand]]
 \endtt
@@ -1635,10 +1640,11 @@ selecting goal. That discarded candidate has no entry event:
 
 \begtt \hisyntax{clojure}
 (mapv (fn [algorithm]
-        (:path (first (filter #(and (= :goal (:state %))
-                                    (= :enter (:phase %)))
-                              (algorithm progress-roads [:start]
-                                         progress-options)))))
+        (:path (:visit (first (filter #(and (= :visit (:event %))
+                                            (= :goal (get-in % [:visit :state]))
+                                            (= :enter (:phase %)))
+                                      (algorithm progress-roads [:start]
+                                                 progress-options))))))
       [ss/bfs ss/best-first])
 ;; => [[:start :goal] [:start :via :goal]]
 \endtt
@@ -2061,8 +2067,8 @@ To trace that same computation, change only the output selection:
 \begtt \hisyntax{clojure}
 (let [events (ss/dfs pruning-game [:root]
                      (assoc pruning-options :emit :events))]
-  [(frequencies (map :phase events))
-   (:value (last events))])
+  [(frequencies (map :phase (filter #(= :visit (:event %)) events)))
+   (get-in (last events) [:visit :value])])
 ;; => [{:enter 11 :exit 11} 3]
 \endtt
 
