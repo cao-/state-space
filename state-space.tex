@@ -1324,12 +1324,12 @@ mapping function one item at a time when initializing starts.
 
 The results of the searches are lazy, but laziness here does not promise that
 exactly one callback or successor is processed for each requested result.
-\code{map-lazy} invokes its mapping function one item at a time; it is used
-where start visits are prepared. Other sequence
-operations, such as \code{keep} in breadth-first traversal, can realize a chunk
-when their input is chunked. The space itself also controls how its
-successors are produced, so consuming one raw successor may realize several
-values from a chunked input. Best-first has an additional requirement: it
+\code{map-lazy} and \code{keep-lazy} invoke their callbacks one item at a
+time; they prepare start visits and candidates in the shared entry-only
+traversal. The space itself controls how its successors are produced, so
+requesting one raw successor may realize several values from a chunked input,
+even though the search decodes and prepares candidates incrementally.
+Best-first has an additional requirement: it
 must examine all successors of the expanded visit before it can choose the
 next visit by priority.
 Propagation updates are processed one state at a time, but all of that

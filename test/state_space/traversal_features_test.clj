@@ -39,6 +39,22 @@
                 search-events))
     (is (every? #(= :progress (:event %)) progress-events))))
 
+(deftest depth-first-enter-output-consumes-chunked-successors-one-at-a-time
+  (let [decoded (atom [])
+        visits (ss/dfs
+                (fn [state]
+                  (when (= :root state) (range 100)))
+                [:root]
+                {:decode-edge (fn [state]
+                                (swap! decoded conj state)
+                                {:state state})})]
+    (is (= {:state :root} (first visits)))
+    (is (empty? @decoded))
+    (is (= {:state 0} (second visits)))
+    (is (= [0] @decoded))
+    (is (= {:state 1} (nth visits 2)))
+    (is (= [0 1] @decoded))))
+
 (deftest frontier-events-distinguish-entry-expansion-and-dfs-return
   (let [graph {:a [:b :c] :b [:d]}
         phases (fn [algorithm]

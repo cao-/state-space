@@ -121,6 +121,14 @@
      (cons (f (first items))
            (map-lazy f (rest items))))))
 
+(defn- keep-lazy [f items]
+  (lazy-seq
+   (when-let [items (seq items)]
+     (let [item (f (first items))]
+       (if (nil? item)
+         (keep-lazy f (rest items))
+         (cons item (keep-lazy f (rest items))))))))
+
 (defn- visit-event [phase visit]
   {:event :visit :phase phase :visit visit})
 
@@ -177,10 +185,11 @@
              (cons visit
                    (let [children
                          (lazy-seq
-                          (keep (fn [successor]
-                                  (let [candidate (prepare-visit visit (decode-edge successor))]
-                                    (if refine (refine visit candidate) candidate)))
-                                (successors-of space opts visit)))]
+                          (keep-lazy
+                           (fn [successor]
+                             (let [candidate (prepare-visit visit (decode-edge successor))]
+                               (if refine (refine visit candidate) candidate)))
+                           (successors-of space opts visit)))]
                      (explore space opts refine
                               next-visited (push-chunk frontier children)
                               pop-item push-chunk))))))))))
