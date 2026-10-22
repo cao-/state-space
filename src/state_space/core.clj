@@ -81,13 +81,16 @@
                             (extend-visit next-callbacks parent transition
                                           {:state (:state transition)})))))
 
-(defn- search-output [algorithm options allowed]
-  (let [output (get options :emit :enter)]
-    (when-not (some #{output} allowed)
-      (throw (ex-info (str algorithm " supports :emit " (pr-str allowed) ".")
-                      {:algorithm algorithm :option :emit :value output
-                       :allowed allowed})))
-    output))
+(defn- search-output
+  ([algorithm options allowed]
+   (search-output algorithm options :enter allowed))
+  ([algorithm options default allowed]
+   (let [output (get options :emit default)]
+     (when-not (some #{output} allowed)
+       (throw (ex-info (str algorithm " supports :emit " (pr-str allowed) ".")
+                       {:algorithm algorithm :option :emit :value output
+                        :allowed allowed})))
+     output)))
 
 (defn- check-fold [algorithm options output]
   (when (:fold options)
@@ -504,8 +507,8 @@
 
   This is the exit view of the shared DFS lifecycle, without event tags;
   equivalent to dfs with :emit :exit, including optional :fold evaluation.
-  :emit :events opts into the full DFS event stream; other :emit values are
-  ignored.
+  :emit defaults to :exit; :events opts into the full DFS event stream.
+  Other :emit values throw ExceptionInfo when called.
   Without a fold, :visit-key nil visits each occurrence, as in dfs.
 
   Optional :fold computes a :value on each completed visit. It is a map:
@@ -550,7 +553,7 @@
   ([space starts]
    (postorder space starts {}))
   ([space starts options]
-   (let [output (if (= :events (:emit options)) :events :exit)]
+   (let [output (search-output :postorder options :exit [:exit :events])]
      (check-fold :postorder options output)
      (depth-first space starts (search-options options) nil output (:fold options)))))
 
@@ -703,7 +706,8 @@
   shortest-path order. Each successor is reached at unit cost unless
   :decode-edge decodes attributed
   successors to transition maps containing :state and an optional :weight.
-  Weights must be finite and non-negative for Dijkstra's guarantees. Route
+  Priority values must be mutually comparable. Weights must be finite and
+  non-negative for Dijkstra's guarantees. Route
   options are as in dfs. Other priorities, such as distance plus a heuristic
   for A* or an extension-provided edge weight for Prim's algorithm, do not
   automatically enable distance-extension; include it explicitly when the

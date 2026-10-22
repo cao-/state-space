@@ -496,8 +496,10 @@ explicitly passing \code{:priority :distance}, automatically adds
 after it and can replace \code{:distance}, changing that ordering. Other
 priorities do not automatically add \code{distance-extension}; include
 \code{ss/distance-extension} explicitly when the priority or results need
-cumulative distance. A~priority function can use another visit field or add
-an estimate of remaining cost as in
+cumulative distance. Priority values must be mutually comparable because the
+search orders pending visits by comparing them; equal priorities are selected
+in enqueue order. A~priority function can use another visit field or add an
+estimate of remaining cost as in
 \ulink[https://en.wikipedia.org/wiki/A*_search_algorithm]{A* search}. For
 example, a~route planner can combine the cost already travelled with a~
 lower-bound estimate to the goal:
@@ -1014,7 +1016,8 @@ ordinary traversal may prepare a~chunk of candidates ahead.
 \code{simple-paths} ignores \code{:fold}: occurrence-based evaluation
 differs from shared-key memoization.
 \code{postorder} returns completed visits by default; \code{:emit :events}
-selects the same full event stream as DFS.
+selects the same full event stream as DFS. Its default output is \code{:exit};
+other explicit \code{:emit} values throw \code{ExceptionInfo}.
 
 To observe evaluation on descent as well as return, ask DFS for events.
 Using the earlier \code{subtree-size} fold, entries expose route visits
@@ -1144,10 +1147,10 @@ keys identify states, so it does not use \code{:visit-key} or
 Invalid \code{:emit} values on operations with selectable output, invalid
 propagation output, folds with \code{:visit-key nil}, and DFS folds with
 entry-only output throw \code{ExceptionInfo} when called, before traversal
-callbacks run. \code{postorder} recognizes only \code{:emit :events}; other
-\code{:emit} values are ignored. Unused options and \code{:fold} on
-operations without folding are ignored. Data and callback contracts are the caller's
-responsibility and are not validated.
+callbacks run. \code{postorder} defaults to \code{:emit :exit} and also accepts
+\code{:emit :events}. Unused options and \code{:fold} on operations without
+folding are ignored. Data and callback contracts are the caller's responsibility
+and are not validated.
 
 To exhaust a~result sequence after finitely many visits, the start collection
 and the reachable search must be finite, and calls to the space and callbacks

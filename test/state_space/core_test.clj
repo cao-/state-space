@@ -346,6 +346,9 @@
            [search/bfs {:emit nil} :emit]
            [search/best-first {:emit :exit} :emit]
            [search/best-first {:emit nil} :emit]
+           [search/postorder {:emit :enter} :emit]
+           [search/postorder {:emit :unknown} :emit]
+           [search/postorder {:emit nil} :emit]
            [search/best-first {:visit-key nil} :visit-key]
            [search/postorder {:fold {} :visit-key nil} :visit-key]]]
     (let [error (try
@@ -370,7 +373,7 @@
                 {:fold fold :priority nil :bottom nil :join nil}]
                [search/best-first {} {:fold fold :bottom nil :join nil}]
                [search/best-first {:emit :events} {:fold fold :bottom nil :join nil}]
-               [search/postorder {} {:emit :unknown :priority nil :bottom nil :join nil}]
+               [search/postorder {} {:priority nil :bottom nil :join nil}]
                [search/postorder {:fold fold}
                 {:priority nil :bottom nil :join nil}]]]
     (doseq [[algorithm options unused] cases]
@@ -391,6 +394,7 @@
            [search/simple-paths {:emit :unknown}]
            [search/bfs {:emit :exit}]
            [search/best-first {:emit :exit}]
+           [search/postorder {:emit :enter}]
            [search/best-first {:visit-key nil}]
            [search/dfs {:fold {}}]
            [search/dfs {:emit :events :fold {} :visit-key nil}]

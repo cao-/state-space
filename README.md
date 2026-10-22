@@ -141,6 +141,9 @@ direct edge's 10. Weights must be finite and non-negative for this
 shortest-path guarantee. User extensions run afterward and can replace
 `:distance`, changing the default ordering.
 
+For a custom `:priority`, return values that are mutually comparable so the
+search can order pending visits.
+
 ## Bottom-up computations
 
 A fold computes a parent's result from its children's results. Initialize
@@ -296,11 +299,10 @@ only `:project`, `:expand?`, and `:decode-edge`, with required `:bottom` and
 
 Invalid `:emit` values on operations with selectable output, invalid
 propagation output, folds with `:visit-key nil`, and DFS folds with entry-only
-output throw `ExceptionInfo` when called. `postorder` recognizes only
-`:emit :events`; other `:emit` values are ignored. Unused options and
-`:fold` on operations without folding are ignored. Traversal callbacks remain
-lazy; data and callback contracts are the caller's responsibility, not
-validated.
+output throw `ExceptionInfo` when called. `postorder` defaults to `:emit :exit`
+and also accepts `:emit :events`. Unused options and `:fold` on operations
+without folding are ignored. Traversal callbacks remain lazy; data and
+callback contracts are the caller's responsibility, not validated.
 
 ## Benchmarks
 
